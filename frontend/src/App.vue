@@ -52,7 +52,7 @@
       <div class="topbar-actions">
         <button v-if="currentCityArea" class="ghost-btn" @click="backToProvince">返回城市</button>
         <button v-if="currentProvince" class="ghost-btn" @click="backToChina">返回全国</button>
-        <button class="ghost-btn" @click="showThemePanel = true">主题切换</button>
+        <button class="ghost-btn" @click="showThemePanel = true">切换风格</button>
         <button
           v-if="!editMode.isAuthenticated"
           class="ghost-btn"
@@ -77,10 +77,11 @@
       </div>
     </header>
 
-    <main class="workspace" :class="{ 'mobile-mode': isMobile }">
+    <main class="workspace" :class="{ 'mobile-mode': isMobile, 'empty-footprints': placesStore.cities.length === 0 }">
       <!-- 空数据引导提示 -->
-      <div v-if="placesStore.cities.length === 0 && !isLoading" class="empty-state-overlay">
+      <div v-if="showEmptyGuide" class="empty-state-overlay">
         <div class="empty-guide-card panel panel-soft animate-scale-in">
+          <button class="guide-close" @click="dismissEmptyGuide" aria-label="关闭引导">×</button>
           <div class="guide-icon">🗺️</div>
           <h2>开始记录你们的足迹</h2>
           <p>点击地图上的省份，进入后解锁编辑模式，即可添加第一个旅行足迹。</p>
@@ -104,34 +105,34 @@
 
       <aside class="sidebar panel panel-strong" :class="{ 'mobile-hidden': isMobile && mobileView !== 'list' && mobileView !== 'stats' }" v-if="placesStore.cities.length > 0">
         <section class="narrative-card">
-          <span class="eyebrow">Narrative First</span>
-          <h2>地图继续下钻，故事继续变细</h2>
+          <span class="eyebrow">Shared Miles</span>
+          <h2>把一起走过的路，收进同一张地图</h2>
           <p>
-            现在已经不是“全国看省、省里看市”就停住了。新版支持三级钻取，
-            从省到市再到区县，足迹能真正落到更细的空间单元。
+            每一个省份、城市和区县，都不是冰冷的坐标。它们是某次出发、某顿晚餐、
+            某张照片和某个忽然想起的傍晚。
           </p>
         </section>
 
         <section class="stat-grid">
           <article class="stat-card">
-            <span class="stat-label">当前可见足迹</span>
+            <span class="stat-label">正在翻看的记忆</span>
             <strong>{{ filteredCities.length }}</strong>
-            <small>{{ currentCityArea ? '当前城市下的记录' : currentProvince ? '当前省份下的记录' : '全国足迹总数' }}</small>
+            <small>{{ currentCityArea ? '这一城里的细小停留' : currentProvince ? '这一省里的同行片段' : '收藏在地图里的全部片段' }}</small>
           </article>
           <article class="stat-card">
-            <span class="stat-label">走过省份</span>
+            <span class="stat-label">共同抵达</span>
             <strong>{{ visitedProvinces }}</strong>
-            <small>三级地图都能联动</small>
+            <small>从远方到日常都算数</small>
           </article>
           <article class="stat-card">
-            <span class="stat-label">照片总数</span>
+            <span class="stat-label">留下照片</span>
             <strong>{{ totalPhotos }}</strong>
-            <small>照片和故事一起沉淀</small>
+            <small>替记忆保留光线</small>
           </article>
           <article class="stat-card accent-card">
-            <span class="stat-label">当前层级</span>
+            <span class="stat-label">现在看到</span>
             <strong>{{ currentViewBadge }}</strong>
-            <small>{{ currentCityArea ? '点区县落点最细' : currentProvince ? '点城市继续下钻' : '点省份进入详情' }}</small>
+            <small>{{ currentCityArea ? '城市里的某个角落' : currentProvince ? '一片省域里的城市' : '从整张中国地图开始' }}</small>
           </article>
         </section>
 
@@ -277,12 +278,26 @@
           </div>
         </div>
 
-        <div class="map-stage-body" :class="{ transitioning: mapTransitioning, 'timeline-mode': viewMode === 'timeline' }">
-          <div v-if="viewMode === 'map'" class="map-overlay-card">
-            <span class="floating-badge">{{ currentCityArea ? 'District Discovery' : currentProvince ? 'City Discovery' : 'Story Mode' }}</span>
+        <div
+          class="map-stage-body"
+          :class="[`skin-${activeMapSkin}`, { transitioning: mapTransitioning, 'timeline-mode': viewMode === 'timeline' }]"
+          :style="mapStageStyle"
+        >
+          <div v-if="viewMode === 'map'" class="map-overlay-card" :class="{ collapsed: mapOverlayCollapsed }">
+            <button
+              class="map-overlay-head"
+              type="button"
+              :aria-label="mapOverlayCollapsed ? '展开地图说明' : '收起地图说明'"
+              @click="mapOverlayCollapsed = !mapOverlayCollapsed"
+            >
+              <span class="floating-badge">{{ currentCityArea ? '区县记忆' : currentProvince ? '城市章节' : '故事模式' }}</span>
+              <span class="overlay-toggle">
+                {{ mapOverlayCollapsed ? '展开' : '收起' }}
+              </span>
+            </button>
             <h3>{{ mapOverlayTitle }}</h3>
-            <p>{{ mapOverlayDescription }}</p>
-            <div class="context-pills">
+            <p v-if="!mapOverlayCollapsed">{{ mapOverlayDescription }}</p>
+            <div v-if="!mapOverlayCollapsed" class="context-pills">
               <span class="context-pill">{{ currentLayerMetric }}</span>
               <span class="context-pill">{{ currentActionShort }}</span>
             </div>
@@ -739,22 +754,23 @@
         <div class="theme-panel panel panel-strong animate-scale-in">
           <div class="modal-header">
             <span class="eyebrow">Visual Tone</span>
-            <h3>选择主题</h3>
-            <p>切换整体氛围，不改变三级钻取结构。</p>
+            <h3>选择整站风格</h3>
+            <p>风格会同时改变页面、地图、卡片和路线色彩，让每次翻看都有不同的情绪。</p>
           </div>
 
           <div class="theme-grid">
             <button
-              v-for="theme in themeStore.themes"
-              :key="theme.id"
+              v-for="skin in mapSkinOptions"
+              :key="skin.id"
               class="theme-card"
-              :class="{ active: theme.id === themeStore.activeTheme?.id }"
-              @click="applyTheme(theme)"
+              :class="{ active: skin.id === activeMapSkin }"
+              @click="setMapSkin(skin.id)"
             >
-              <div class="theme-preview" :style="getThemePreviewStyle(theme)">
+              <div class="theme-preview" :style="getThemePreviewStyle(skin)">
                 <div class="theme-preview-dot"></div>
               </div>
-              <strong>{{ theme.name }}</strong>
+              <strong>{{ skin.name }}</strong>
+              <small>{{ skin.mood }}</small>
             </button>
           </div>
 
@@ -967,10 +983,8 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { deletePhoto, setCoverPhoto, updatePhotoOrder, uploadPhotos } from './api'
 import { useEditStore } from './stores/edit'
 import { usePlacesStore } from './stores/places'
-import { useThemeStore } from './stores/theme'
 
 const placesStore = usePlacesStore()
-const themeStore = useThemeStore()
 const editMode = useEditStore()
 
 const mapRef = ref(null)
@@ -1013,16 +1027,20 @@ const selectedCluster = ref(null)
 const mapTransitioning = ref(false)
 const transitionText = ref('正在切换地图层级...')
 const viewMode = ref('map')
+const activeMapSkin = ref(localStorage.getItem('mapSkin') || 'warm')
+const emptyGuideDismissed = ref(localStorage.getItem('emptyGuideDismissed') !== '0')
+const mapOverlayCollapsed = ref(true)
 
 // 手机端适配
-const isMobile = ref(window.innerWidth < 768)
+const MOBILE_BREAKPOINT = 768
+const isMobile = ref(window.innerWidth < MOBILE_BREAKPOINT)
 const mobileView = ref('map')
 const checkMobile = () => {
-  isMobile.value = window.innerWidth < 768
+  isMobile.value = window.innerWidth < MOBILE_BREAKPOINT
 }
 const mobileResizeHandler = () => {
   checkMobile()
-  chartInstance.value?.resize()
+  requestMapResize()
 }
 
 const currentProvince = ref(null)
@@ -1032,6 +1050,8 @@ const districtGeoCache = ref({})
 const hoverLabel = ref(null)
 const tooltipPosition = ref({ x: 0, y: 0 })
 let echartsLib = null
+let mapResizeObserver = null
+let mapResizeTimer = null
 
 const formData = ref(createEmptyForm())
 const editData = ref({
@@ -1066,6 +1086,194 @@ const quickTagOptions = [
   '节日',
   '雨天',
 ]
+
+const mapSkinOptions = [
+  {
+    id: 'warm',
+    name: '暖砂',
+    mood: '像傍晚翻开的旅行相册',
+    preview: 'linear-gradient(135deg, #f5dcc0, #b85c38)',
+    primary: '#8d5637',
+    accent: '#c94f35',
+    dark: '#2f2116',
+    light: '#fff3df',
+    pageBackground:
+      'radial-gradient(circle at 10% 0%, rgba(255, 244, 226, 0.95), transparent 34%), radial-gradient(circle at 92% 12%, rgba(201, 114, 70, 0.18), transparent 28%), linear-gradient(135deg, #fff8ec 0%, #f0ddc3 48%, #dfc09e 100%)',
+    text: '#2f2116',
+    muted: 'rgba(47, 33, 22, 0.68)',
+    panelSoft: 'rgba(255, 252, 247, 0.78)',
+    panelStrong: 'rgba(255, 248, 236, 0.9)',
+    panelBorder: 'rgba(139, 89, 54, 0.14)',
+    accentSoft: 'rgba(201, 79, 53, 0.12)',
+    buttonBg: 'rgba(255, 255, 255, 0.74)',
+    buttonText: '#2f2116',
+    orbOne: 'radial-gradient(circle, rgba(255, 107, 77, 0.2), transparent 70%)',
+    orbTwo: 'radial-gradient(circle, rgba(212, 165, 116, 0.26), transparent 70%)',
+    orbThree: 'radial-gradient(circle, rgba(232, 180, 145, 0.25), transparent 70%)',
+    stageBackground:
+      'radial-gradient(circle at 72% 18%, rgba(221, 151, 92, 0.26), transparent 28%), linear-gradient(145deg, #fff3df 0%, #ead3b4 48%, #c99b6c 100%)',
+    sea: 'rgba(255, 250, 240, 0.72)',
+    land: '#e7c39d',
+    landAlt: '#f3d9ba',
+    border: '#b88356',
+    borderStrong: '#8d5637',
+    glow: 'rgba(184, 92, 56, 0.28)',
+    point: '#c94f35',
+    pointHalo: 'rgba(201, 79, 53, 0.38)',
+    label: '#6f4229',
+    line: '#b85c38',
+    routes: { flight: '#4f8cc9', train: '#6f8f55', car: '#d58945', ship: '#3f8d7b' },
+    panel: 'rgba(255, 248, 236, 0.82)',
+  },
+  {
+    id: 'night',
+    name: '星图',
+    mood: '适合深夜重看远方',
+    preview: 'linear-gradient(135deg, #111827, #d9a441)',
+    primary: '#e0ad58',
+    accent: '#ffbf5f',
+    dark: '#080d16',
+    light: '#162033',
+    pageBackground:
+      'radial-gradient(circle at 12% 8%, rgba(224, 173, 88, 0.18), transparent 30%), radial-gradient(circle at 90% 20%, rgba(78, 143, 216, 0.14), transparent 32%), linear-gradient(135deg, #070b12 0%, #111827 45%, #221a13 100%)',
+    text: '#fff0d2',
+    muted: 'rgba(255, 239, 210, 0.66)',
+    panelSoft: 'rgba(13, 19, 31, 0.76)',
+    panelStrong: 'rgba(12, 18, 30, 0.88)',
+    panelBorder: 'rgba(226, 184, 106, 0.18)',
+    accentSoft: 'rgba(226, 184, 106, 0.16)',
+    buttonBg: 'rgba(255, 236, 196, 0.1)',
+    buttonText: '#ffe6b8',
+    orbOne: 'radial-gradient(circle, rgba(224, 173, 88, 0.2), transparent 70%)',
+    orbTwo: 'radial-gradient(circle, rgba(74, 144, 217, 0.18), transparent 70%)',
+    orbThree: 'radial-gradient(circle, rgba(255, 191, 95, 0.12), transparent 70%)',
+    stageBackground:
+      'radial-gradient(circle at 18% 12%, rgba(217, 164, 65, 0.18), transparent 26%), radial-gradient(circle at 84% 68%, rgba(74, 144, 217, 0.16), transparent 30%), linear-gradient(145deg, #090f19 0%, #162033 50%, #2b2118 100%)',
+    sea: 'rgba(11, 17, 28, 0.94)',
+    land: '#253246',
+    landAlt: '#314059',
+    border: 'rgba(226, 184, 106, 0.58)',
+    borderStrong: '#e0ad58',
+    glow: 'rgba(226, 184, 106, 0.36)',
+    point: '#ffbf5f',
+    pointHalo: 'rgba(255, 191, 95, 0.42)',
+    label: '#ffe6b8',
+    line: '#e0ad58',
+    routes: { flight: '#70b7ff', train: '#8de6b4', car: '#ffbf5f', ship: '#7ce3f1' },
+    panel: 'rgba(12, 18, 30, 0.76)',
+  },
+  {
+    id: 'vintage',
+    name: '复古',
+    mood: '像旧票根、纸地图和慢慢走',
+    preview: 'linear-gradient(135deg, #efe1bd, #31513f)',
+    primary: '#31513f',
+    accent: '#a33f2f',
+    dark: '#302716',
+    light: '#f4ead2',
+    pageBackground:
+      'radial-gradient(circle at 18% 12%, rgba(49, 81, 63, 0.12), transparent 30%), radial-gradient(circle at 88% 18%, rgba(127, 100, 63, 0.18), transparent 28%), linear-gradient(135deg, #f5edd8 0%, #dac391 52%, #9c7c4f 100%)',
+    text: '#302716',
+    muted: 'rgba(48, 39, 22, 0.68)',
+    panelSoft: 'rgba(248, 239, 218, 0.78)',
+    panelStrong: 'rgba(244, 234, 210, 0.9)',
+    panelBorder: 'rgba(49, 81, 63, 0.17)',
+    accentSoft: 'rgba(49, 81, 63, 0.13)',
+    buttonBg: 'rgba(255, 250, 234, 0.72)',
+    buttonText: '#302716',
+    orbOne: 'radial-gradient(circle, rgba(49, 81, 63, 0.18), transparent 70%)',
+    orbTwo: 'radial-gradient(circle, rgba(163, 63, 47, 0.14), transparent 70%)',
+    orbThree: 'radial-gradient(circle, rgba(213, 185, 128, 0.26), transparent 70%)',
+    stageBackground:
+      'radial-gradient(circle at 24% 20%, rgba(49, 81, 63, 0.12), transparent 30%), linear-gradient(145deg, #f4ead2 0%, #d7bf8d 55%, #7f643f 100%)',
+    sea: 'rgba(238, 222, 185, 0.72)',
+    land: '#d2b77d',
+    landAlt: '#ead7a9',
+    border: '#7d6540',
+    borderStrong: '#31513f',
+    glow: 'rgba(49, 81, 63, 0.28)',
+    point: '#a33f2f',
+    pointHalo: 'rgba(163, 63, 47, 0.34)',
+    label: '#3e3321',
+    line: '#31513f',
+    routes: { flight: '#7b6042', train: '#31513f', car: '#b06f3c', ship: '#527f73' },
+    panel: 'rgba(244, 234, 210, 0.84)',
+  },
+  {
+    id: 'aero',
+    name: '航线',
+    mood: '清爽、明亮，像下一次出发',
+    preview: 'linear-gradient(135deg, #dff4ff, #2f8f9d)',
+    primary: '#2f8f9d',
+    accent: '#ff8a45',
+    dark: '#173f49',
+    light: '#f7fcff',
+    pageBackground:
+      'radial-gradient(circle at 12% 8%, rgba(47, 143, 157, 0.16), transparent 30%), radial-gradient(circle at 88% 18%, rgba(255, 138, 69, 0.14), transparent 26%), linear-gradient(135deg, #f8fdff 0%, #dceff6 48%, #b8d5df 100%)',
+    text: '#173f49',
+    muted: 'rgba(23, 63, 73, 0.68)',
+    panelSoft: 'rgba(247, 252, 255, 0.78)',
+    panelStrong: 'rgba(241, 250, 253, 0.9)',
+    panelBorder: 'rgba(47, 143, 157, 0.16)',
+    accentSoft: 'rgba(47, 143, 157, 0.12)',
+    buttonBg: 'rgba(255, 255, 255, 0.72)',
+    buttonText: '#173f49',
+    orbOne: 'radial-gradient(circle, rgba(47, 143, 157, 0.18), transparent 70%)',
+    orbTwo: 'radial-gradient(circle, rgba(112, 183, 255, 0.18), transparent 70%)',
+    orbThree: 'radial-gradient(circle, rgba(255, 138, 69, 0.16), transparent 70%)',
+    stageBackground:
+      'radial-gradient(circle at 70% 20%, rgba(47, 143, 157, 0.22), transparent 26%), linear-gradient(145deg, #f7fcff 0%, #d9edf6 48%, #a9c9d8 100%)',
+    sea: 'rgba(236, 248, 255, 0.82)',
+    land: '#cfe5ec',
+    landAlt: '#f5fbff',
+    border: '#72a8b8',
+    borderStrong: '#2f8f9d',
+    glow: 'rgba(47, 143, 157, 0.25)',
+    point: '#ff8a45',
+    pointHalo: 'rgba(255, 138, 69, 0.36)',
+    label: '#275b66',
+    line: '#2f8f9d',
+    routes: { flight: '#2f8fdf', train: '#3ba986', car: '#ff9b4e', ship: '#24a3b5' },
+    panel: 'rgba(247, 252, 255, 0.84)',
+  },
+]
+
+const activeMapSkinConfig = computed(
+  () => mapSkinOptions.find((skin) => skin.id === activeMapSkin.value) || mapSkinOptions[0],
+)
+
+const showEmptyGuide = computed(
+  () =>
+    placesStore.cities.length === 0 &&
+    !isLoading.value &&
+    !emptyGuideDismissed.value &&
+    !editMode.isAuthenticated &&
+    !showPasswordModal.value,
+)
+
+const mapStageStyle = computed(() => ({
+  '--map-stage-bg': activeMapSkinConfig.value.stageBackground,
+  '--map-panel-bg': activeMapSkinConfig.value.panel,
+  '--map-skin-label': activeMapSkinConfig.value.label,
+  '--map-skin-border': activeMapSkinConfig.value.border,
+  '--map-skin-glow': activeMapSkinConfig.value.glow,
+}))
+
+function dismissEmptyGuide() {
+  emptyGuideDismissed.value = true
+  localStorage.setItem('emptyGuideDismissed', '1')
+  requestMapResize(120)
+}
+
+function setMapSkin(id) {
+  activeMapSkin.value = id
+  localStorage.setItem('mapSkin', id)
+  if (showThemePanel.value) {
+    showThemePanel.value = false
+  }
+  updateMapView()
+  requestMapResize()
+}
 
 function createEmptyForm() {
   return {
@@ -1178,43 +1386,55 @@ function appendTag(mode, tag) {
 
 function getThemePreviewStyle(theme) {
   return {
-    '--preview-primary': theme.primary_color,
-    '--preview-accent': theme.accent_color,
-    '--preview-light': theme.light_color,
+    '--preview-primary': theme.primary,
+    '--preview-accent': theme.accent,
+    '--preview-light': theme.light,
+    '--preview-bg': theme.stageBackground,
   }
 }
 
 const appStyle = computed(() => {
-  const theme = themeStore.activeTheme
-  if (!theme) return {}
+  const theme = activeMapSkinConfig.value
   return {
-    '--primary': theme.primary_color,
-    '--accent': theme.accent_color,
-    '--dark': theme.dark_color,
-    '--light': theme.light_color,
+    '--primary': theme.primary,
+    '--accent': theme.accent,
+    '--dark': theme.dark,
+    '--light': theme.light,
+    '--page-background': theme.pageBackground,
+    '--text-main': theme.text,
+    '--text-muted': theme.muted,
+    '--panel-soft-bg': theme.panelSoft,
+    '--panel-strong-bg': theme.panelStrong,
+    '--panel-border': theme.panelBorder,
+    '--accent-soft': theme.accentSoft,
+    '--button-bg': theme.buttonBg,
+    '--button-text': theme.buttonText,
+    '--orb-one': theme.orbOne,
+    '--orb-two': theme.orbTwo,
+    '--orb-three': theme.orbThree,
   }
 })
 
 const currentViewName = computed(() => {
-  if (currentCityArea.value) return `${currentCityArea.value.name} 区县视图`
-  if (currentProvince.value) return `${currentProvince.value.name} 城市视图`
-  return '我们的足迹'
+  if (currentCityArea.value) return `${currentCityArea.value.name} 的角落`
+  if (currentProvince.value) return `${currentProvince.value.name} 的一路风景`
+  return '我们的足迹地图'
 })
 
 const currentViewBadge = computed(() => {
-  if (currentCityArea.value) return 'District View'
-  if (currentProvince.value) return 'City View'
-  return 'National View'
+  if (currentCityArea.value) return '区县记忆'
+  if (currentProvince.value) return '城市漫游'
+  return '全国相册'
 })
 
 const currentViewDescription = computed(() => {
   if (currentCityArea.value) {
-    return '现在看到的是区县级别的地图，可以把一次城市旅行拆成更细的记忆点。'
+    return '把一座城市拆成更小的片段：街区、公园、车站、海边，以及只有你们知道的某个转角。'
   }
   if (currentProvince.value) {
-    return '省内模式支持继续下钻，点击城市进入区县层，再把足迹落到更细的位置。'
+    return '这一省里藏着很多次出发。点开城市，就能看见更贴近当时心情的地方。'
   }
-  return '从全国出发，一路下钻到区县，让旅行记忆既有叙事感，也有空间精度。'
+  return '从第一次出发到下一次抵达，把你们一起走过的地方，慢慢点亮成一张会呼吸的地图。'
 })
 
 const breadcrumbTrail = computed(() => {
@@ -1229,21 +1449,21 @@ const breadcrumbTrail = computed(() => {
 })
 
 const mapStageTitle = computed(() => {
-  if (currentCityArea.value) return `${currentCityArea.value.name} · 区县足迹图谱`
-  if (currentProvince.value) return `${currentProvince.value.name} · 城市足迹图谱`
-  return '中国足迹总览'
+  if (currentCityArea.value) return `${currentCityArea.value.name} · 细碎日光`
+  if (currentProvince.value) return `${currentProvince.value.name} · 城市片段`
+  return '中国足迹长卷'
 })
 
 const currentActionHint = computed(() => {
   if (currentCityArea.value) {
     return editMode.isAuthenticated
-      ? '点击区县可直接新增区县级足迹，点击已记录点位可打开详情。'
-      : '浏览区县层细节时，可以直接点已有记录查看这座城市里更细的回忆。'
+      ? '点一个区县，把那天的照片、天气和心情放回原来的地方。'
+      : '这里适合重看一座城市里的小地方，那些不像景点、却很像你们的瞬间。'
   }
   if (currentProvince.value) {
-    return '这里的城市现在是中间层，点击城市会继续进入区县地图。'
+    return '点开一座城市，看看这趟旅程在更细的地方留下了什么。'
   }
-  return '从全国地图进入省份，再逐层下钻到更精细的位置。'
+  return '从整张地图开始，沿着你们的脚步，慢慢靠近每一段回忆。'
 })
 
 const currentLayerMetric = computed(() => {
@@ -1253,51 +1473,51 @@ const currentLayerMetric = computed(() => {
 })
 
 const currentActionShort = computed(() => {
-  if (currentCityArea.value) return '区县层可精细记录'
-  if (currentProvince.value) return '继续下钻到区县'
-  return '先选一个省份'
+  if (currentCityArea.value) return '把回忆放进角落'
+  if (currentProvince.value) return '走进城市里面'
+  return '从一片省域开始'
 })
 
 const mapOverlayTitle = computed(() => {
-  if (currentCityArea.value) return '点区县补足迹，点记录看细节'
-  if (currentProvince.value) return '点城市继续下钻，点足迹直接看详情'
-  return '地图不再只是地理坐标的堆叠'
+  if (currentCityArea.value) return '这座城，有你们的具体坐标'
+  if (currentProvince.value) return '每座城市，都是一段不同的章节'
+  return '把一起走过的中国，慢慢点亮'
 })
 
 const mapOverlayDescription = computed(() => {
   if (currentCityArea.value) {
-    return '区县层让地图真正从“旅行过这座城”变成“在哪些地方留下了记忆”。'
+    return '不是只记得去过某座城，而是记得那条路、那顿饭、那场雨，以及照片背后的笑。'
   }
   if (currentProvince.value) {
-    return '现在省内城市不再直接作为终点，而是三级钻取中的中间层，能继续进到区县。'
+    return '省份像一本翻开的章节，城市是页码，区县是夹在里面的票根和照片。'
   }
-  return '新版把操作、阅读和筛选拆到了不同层级，先看故事，再看地图，再决定要不要继续下钻。'
+  return '这不是路线打卡表，而是一份共同生活的地理索引：去过哪里，也记得为什么难忘。'
 })
 
 const emptyDetailTitle = computed(() => {
-  if (currentCityArea.value) return '从区县里点开更细的回忆'
-  if (currentProvince.value) return '从省内挑一座城市继续下钻'
-  return '先从地图里点开一段故事'
+  if (currentCityArea.value) return '等一段具体的小回忆'
+  if (currentProvince.value) return '选一座城市，翻开下一页'
+  return '先从地图里点亮第一段故事'
 })
 
 const emptyDetailDescription = computed(() => {
   if (currentCityArea.value) {
-    return '如果进入了编辑模式，点击区县区域就能把足迹精确落到更细的位置。'
+    return '也许是一次散步、一次赶路、一次临时起意。等你们把它写下来，这里就会有光。'
   }
   if (currentProvince.value) {
-    return '省内地图现在支持三级钻取，先点击城市进入区县层，再决定具体记录在哪个区县。'
+    return '每座城市都有自己的语气。点开它，再把记忆放到更准确的位置。'
   }
-  return '你可以先从左侧时间线进入，也可以直接在全国地图上点任意一个省份。'
+  return '可以从一个省份开始，也可以等下一次旅行回来，再把新的章节补上。'
 })
 
 const collectionTip = computed(() => {
   if (currentCityArea.value) {
-    return '当前列表只显示这座城市下的区县级足迹，方便比对同城不同区域的回忆。'
+    return '这里收着这座城市里更小的停留，适合慢慢对照每一段发生的位置。'
   }
   if (currentProvince.value) {
-    return '这里汇总的是当前省份里的足迹，点任意城市都可以继续进入区县层。'
+    return '这一省里的记录都会在这里汇合，像一本按城市分好的旅行手账。'
   }
-  return '列表与地图同步筛选，适合从时间线之外快速跳回某条旧记录。'
+  return '所有旧日子都按地点收好，想念哪一段，就从这里跳回去。'
 })
 
 const visitedProvinces = computed(() => {
@@ -1579,19 +1799,15 @@ function getDistrictFeatureByName(name) {
   }) || null
 }
 
-async function applyTheme(theme) {
-  await themeStore.setActive(theme.id)
-  showThemePanel.value = false
-  updateMapView()
-}
-
 async function submitPassword() {
   if (!passwordInput.value) return
   authError.value = ''
   await editMode.login(passwordInput.value)
   if (editMode.isAuthenticated) {
+    dismissEmptyGuide()
     showPasswordModal.value = false
     passwordInput.value = ''
+    requestMapResize(160)
     return
   }
   authError.value = editMode.error || '登录失败'
@@ -2023,8 +2239,18 @@ function getTransportSymbol(type) {
   }
 }
 
+function requestMapResize(delay = 60) {
+  if (mapResizeTimer) {
+    window.clearTimeout(mapResizeTimer)
+  }
+  mapResizeTimer = window.setTimeout(() => {
+    mapResizeTimer = null
+    chartInstance.value?.resize()
+  }, delay)
+}
+
 function getMapBaseOption() {
-  const theme = themeStore.activeTheme
+  const skin = activeMapSkinConfig.value
   const mapName = currentCityArea.value
     ? `district-${currentCityArea.value.adcode}`
     : currentProvince.value
@@ -2036,6 +2262,7 @@ function getMapBaseOption() {
     : currentProvince.value
       ? [currentProvince.value.center_lon, currentProvince.value.center_lat]
       : [104, 36]
+  const routeColors = skin.routes
 
   return {
     backgroundColor: 'transparent',
@@ -2045,24 +2272,29 @@ function getMapBaseOption() {
       roam: true,
       center,
       zoom: currentCityArea.value ? 1.2 : currentProvince.value ? 1.8 : 1.15,
+      layoutCenter: ['50%', '52%'],
+      layoutSize: currentCityArea.value ? '95%' : currentProvince.value ? '92%' : '86%',
       scaleLimit: {
         min: currentCityArea.value ? 0.9 : currentProvince.value ? 0.8 : 0.9,
         max: 9,
       },
       label: { show: false },
       itemStyle: {
-        areaColor: theme?.light_color || '#F8F4E8',
-        borderColor: theme?.primary_color || '#E8B4B8',
-        borderWidth: 1,
-        shadowColor: 'rgba(52,33,17,0.10)',
-        shadowBlur: 14,
+        areaColor: skin.land,
+        borderColor: skin.border,
+        borderWidth: activeMapSkin.value === 'night' ? 0.9 : 1,
+        shadowColor: skin.glow,
+        shadowBlur: activeMapSkin.value === 'night' ? 28 : 18,
+        shadowOffsetY: activeMapSkin.value === 'night' ? 8 : 6,
       },
       emphasis: {
         label: { show: false },
         itemStyle: {
-          areaColor: theme?.primary_color || '#E8B4B8',
-          borderColor: theme?.accent_color || '#FF6B6B',
+          areaColor: skin.landAlt,
+          borderColor: skin.borderStrong,
           borderWidth: 2,
+          shadowColor: skin.glow,
+          shadowBlur: 24,
         },
       },
     },
@@ -2079,10 +2311,10 @@ function getMapBaseOption() {
           symbolSize: 5,
         },
         lineStyle: {
-          color: theme?.primary_color || '#E8B4B8',
-          width: 1.5,
+          color: skin.line,
+          width: activeMapSkin.value === 'night' ? 1.8 : 1.5,
           curveness: 0.12,
-          opacity: 0.55,
+          opacity: activeMapSkin.value === 'night' ? 0.74 : 0.56,
         },
       },
       // 旅程路线 - 飞机
@@ -2098,10 +2330,10 @@ function getMapBaseOption() {
           trailLength: 0.15,
           symbol: getTransportSymbol('flight'),
           symbolSize: 12,
-          color: '#4A90D9',
+          color: routeColors.flight,
         },
         lineStyle: {
-          color: '#4A90D9',
+          color: routeColors.flight,
           width: 2.5,
           curveness: 0.5,
           opacity: 0.85,
@@ -2126,10 +2358,10 @@ function getMapBaseOption() {
           trailLength: 0.2,
           symbol: getTransportSymbol('train'),
           symbolSize: 10,
-          color: '#4A9B7C',
+          color: routeColors.train,
         },
         lineStyle: {
-          color: '#4A9B7C',
+          color: routeColors.train,
           width: 2,
           type: 'dashed',
           curveness: 0,
@@ -2155,10 +2387,10 @@ function getMapBaseOption() {
           trailLength: 0.1,
           symbol: getTransportSymbol('car'),
           symbolSize: 8,
-          color: '#F6AD55',
+          color: routeColors.car,
         },
         lineStyle: {
-          color: '#F6AD55',
+          color: routeColors.car,
           width: 2.5,
           curveness: 0.2,
           opacity: 0.7,
@@ -2183,10 +2415,10 @@ function getMapBaseOption() {
           trailLength: 0.25,
           symbol: getTransportSymbol('ship'),
           symbolSize: 10,
-          color: '#2C5F4D',
+          color: routeColors.ship,
         },
         lineStyle: {
-          color: '#2C5F4D',
+          color: routeColors.ship,
           width: 2,
           curveness: 0.35,
           opacity: 0.75,
@@ -2208,17 +2440,17 @@ function getMapBaseOption() {
         },
         data: buildScatterData(footprintGroups.value),
         itemStyle: {
-          color: theme?.accent_color || '#FF6B6B',
-          borderColor: 'rgba(255,255,255,0.7)',
+          color: skin.point,
+          borderColor: activeMapSkin.value === 'night' ? 'rgba(255,235,195,0.86)' : 'rgba(255,255,255,0.84)',
           borderWidth: 2,
-          shadowBlur: 18,
-          shadowColor: theme?.accent_color || '#FF6B6B',
+          shadowBlur: activeMapSkin.value === 'night' ? 26 : 20,
+          shadowColor: skin.pointHalo,
         },
         label: {
           show: true,
           position: 'right',
           distance: 8,
-          color: theme?.dark_color || '#8B7355',
+          color: skin.label,
           fontFamily: 'Noto Serif SC',
           fontSize: 12,
           formatter: '{b}',
@@ -2239,8 +2471,8 @@ function getMapBaseOption() {
         },
         data: buildScatterData(footprintGroups.value),
         itemStyle: {
-          color: theme?.accent_color || '#FF6B6B',
-          opacity: 0.72,
+          color: skin.point,
+          opacity: activeMapSkin.value === 'night' ? 0.86 : 0.72,
         },
       },
     ],
@@ -2253,6 +2485,7 @@ function updateMapView() {
     notMerge: true,
     lazyUpdate: false,
   })
+  chartInstance.value.resize()
 }
 
 // ========== 旅程相关函数 ==========
@@ -2437,6 +2670,11 @@ async function initMap() {
 
   chartInstance.value = echartsLib.init(mapRef.value)
   updateMapView()
+  await nextTick()
+  requestMapResize(120)
+  mapResizeObserver?.disconnect()
+  mapResizeObserver = new ResizeObserver(() => requestMapResize(80))
+  mapResizeObserver.observe(mapRef.value)
 
   chartInstance.value.on('mouseover', 'geo', (params) => {
     tooltipPosition.value = {
@@ -2554,9 +2792,11 @@ onMounted(async () => {
   loadingText.value = '初始化页面...'
 
   try {
-    await themeStore.fetchThemes()
-    await themeStore.fetchActiveTheme()
-    await placesStore.fetchPlaces()
+    await placesStore.fetchPlaces().catch(() => {
+      placesStore.provinces = []
+      placesStore.cities = []
+      showToast('足迹数据暂时加载失败，地图框架仍可预览', 'error', 4200)
+    })
     await placesStore.fetchJourneys().catch(() => {
       placesStore.journeys = []
       showToast('旅程数据暂时加载失败，地图足迹仍可正常浏览', 'error', 4200)
@@ -2570,15 +2810,21 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', mobileResizeHandler)
+  mapResizeObserver?.disconnect()
+  if (mapResizeTimer) {
+    window.clearTimeout(mapResizeTimer)
+  }
   clearPendingPhotos()
   chartInstance.value?.dispose()
 })
 
-watch(
-  () => themeStore.activeTheme,
-  () => updateMapView(),
-  { deep: true },
-)
+watch(viewMode, () => {
+  requestMapResize(120)
+})
+
+watch(mobileView, () => {
+  requestMapResize(120)
+})
 
 watch(
   () => editMode.showPasswordModal,
@@ -2634,10 +2880,7 @@ watch(
 :global(body) {
   margin: 0;
   font-family: 'ZCOOL XiaoWei', 'Noto Serif SC', serif;
-  background:
-    radial-gradient(circle at top left, rgba(255, 247, 237, 0.95), transparent 32%),
-    radial-gradient(circle at bottom right, rgba(212, 165, 116, 0.18), transparent 30%),
-    linear-gradient(135deg, var(--light) 0%, rgba(248, 244, 232, 0.96) 45%, #e8ddcc 100%);
+  background: #f6ecdf;
   color: #241a13;
 }
 
@@ -2679,6 +2922,9 @@ watch(
   padding: 24px;
   overflow-x: hidden;
   overflow-y: auto;
+  background: var(--page-background);
+  color: var(--text-main);
+  transition: background 0.35s ease, color 0.35s ease;
 }
 
 .ambient-layer {
@@ -2701,7 +2947,7 @@ watch(
   height: 36rem;
   top: -8rem;
   left: -7rem;
-  background: radial-gradient(circle, rgba(255, 107, 107, 0.22), transparent 70%);
+  background: var(--orb-one);
 }
 
 .orb-2 {
@@ -2709,7 +2955,7 @@ watch(
   height: 28rem;
   right: -5rem;
   top: 10rem;
-  background: radial-gradient(circle, rgba(212, 165, 116, 0.24), transparent 70%);
+  background: var(--orb-two);
   animation-delay: -5s;
 }
 
@@ -2718,7 +2964,7 @@ watch(
   height: 24rem;
   left: 26%;
   bottom: -5rem;
-  background: radial-gradient(circle, rgba(232, 180, 184, 0.25), transparent 70%);
+  background: var(--orb-three);
   animation-delay: -9s;
 }
 
@@ -2730,6 +2976,7 @@ watch(
 
 .light-rays {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 35%);
+  mix-blend-mode: soft-light;
 }
 
 .noise-overlay {
@@ -2740,18 +2987,19 @@ watch(
 .panel {
   position: relative;
   z-index: 1;
-  border: 1px solid rgba(139, 115, 85, 0.12);
+  border: 1px solid var(--panel-border);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
+  transition: background 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, color 0.32s ease;
 }
 
 .panel-soft {
-  background: rgba(255, 252, 247, 0.74);
+  background: var(--panel-soft-bg);
 }
 
 .panel-strong {
-  background: rgba(255, 250, 243, 0.84);
-  box-shadow: 0 18px 60px rgba(44, 27, 14, 0.1);
+  background: var(--panel-strong-bg);
+  box-shadow: 0 18px 60px color-mix(in srgb, var(--dark) 18%, transparent);
 }
 
 .topbar {
@@ -2792,7 +3040,7 @@ watch(
 .helper-card p,
 .upload-box p {
   margin: 0;
-  color: rgba(36, 26, 19, 0.7);
+  color: var(--text-muted);
   line-height: 1.7;
 }
 
@@ -2804,25 +3052,25 @@ watch(
 }
 
 .breadcrumb-chip {
-  border: 1px solid rgba(139, 115, 85, 0.12);
+  border: 1px solid var(--panel-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.68);
+  background: var(--button-bg);
   padding: 8px 12px;
   cursor: pointer;
-  color: #241a13;
+  color: var(--button-text);
   transition: all 0.2s ease;
 }
 
 .breadcrumb-chip.active {
-  background: rgba(187, 77, 51, 0.12);
-  border-color: rgba(187, 77, 51, 0.24);
-  color: #a84a31;
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  color: var(--accent);
 }
 
 .eyebrow {
   display: inline-flex;
   margin-bottom: 10px;
-  color: rgba(157, 106, 47, 0.92);
+  color: color-mix(in srgb, var(--primary) 88%, var(--accent));
   text-transform: uppercase;
   letter-spacing: 0.22em;
   font-size: 0.76rem;
@@ -2837,8 +3085,8 @@ watch(
 .status-pill {
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.65);
-  color: rgba(187, 77, 51, 0.95);
+  background: var(--button-bg);
+  color: var(--accent);
   font-size: 0.78rem;
 }
 
@@ -2878,9 +3126,9 @@ watch(
 }
 
 .ghost-btn {
-  background: rgba(255, 255, 255, 0.7);
-  color: #241a13;
-  box-shadow: 0 8px 24px rgba(50, 32, 18, 0.06);
+  background: var(--button-bg);
+  color: var(--button-text);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dark) 10%, transparent);
 }
 
 .ghost-btn:hover,
@@ -2909,44 +3157,50 @@ watch(
 }
 
 .primary-btn {
-  background: linear-gradient(135deg, #2f2116 0%, #6e4928 100%);
-  color: #fff8ef;
-  box-shadow: 0 12px 28px rgba(47, 33, 22, 0.16);
+  background: linear-gradient(135deg, var(--dark) 0%, var(--primary) 100%);
+  color: color-mix(in srgb, var(--light) 88%, white);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--primary) 28%, transparent);
 }
 
 .primary-btn:disabled {
-  opacity: 0.4;
+  background: color-mix(in srgb, var(--button-bg) 78%, var(--primary));
+  color: var(--text-muted);
+  box-shadow: none;
+  opacity: 1;
   cursor: not-allowed;
 }
 
 .danger-btn {
   width: 100%;
-  background: rgba(187, 77, 51, 0.12);
-  color: #a53f28;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 
 .ghost-btn:disabled,
 .primary-btn:disabled,
 .danger-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
   transform: none;
 }
 
 .active-badge {
-  background: rgba(187, 77, 51, 0.14);
-  color: #b54c33;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .workspace {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(290px, 360px) minmax(520px, 1fr) minmax(300px, 380px);
+  grid-template-columns: minmax(260px, 340px) minmax(520px, 1fr) minmax(270px, 360px);
   gap: 24px;
   align-items: stretch;
   min-height: calc(100vh - 152px);
   min-height: calc(100dvh - 152px);
+}
+
+.workspace.empty-footprints {
+  grid-template-columns: minmax(620px, 1fr) minmax(340px, 520px);
 }
 
 .sidebar,
@@ -2971,8 +3225,8 @@ watch(
 .memory-list-card {
   padding: 18px;
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.5);
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  background: color-mix(in srgb, var(--panel-soft-bg) 78%, transparent);
+  border: 1px solid var(--panel-border);
   transition: transform 0.22s ease, border-color 0.22s ease, background-color 0.22s ease;
 }
 
@@ -2985,8 +3239,8 @@ watch(
 .stat-card {
   padding: 18px;
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.52);
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  background: color-mix(in srgb, var(--panel-soft-bg) 80%, transparent);
+  border: 1px solid var(--panel-border);
   transition: transform 0.22s ease, border-color 0.22s ease, background 0.22s ease;
 }
 
@@ -2996,8 +3250,8 @@ watch(
 .timeline-card:hover,
 .memory-list-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(187, 77, 51, 0.18);
-  background-color: rgba(255, 255, 255, 0.62);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  background-color: color-mix(in srgb, var(--panel-soft-bg) 92%, white);
 }
 
 .stat-card strong {
@@ -3009,13 +3263,13 @@ watch(
 
 .stat-label,
 .legend-title {
-  color: rgba(36, 26, 19, 0.66);
+  color: var(--text-muted);
   font-size: 0.82rem;
 }
 
 .accent-card {
-  background: linear-gradient(135deg, rgba(47, 33, 22, 0.95), rgba(113, 74, 40, 0.9));
-  color: #fff7ed;
+  background: linear-gradient(135deg, var(--dark), var(--primary));
+  color: color-mix(in srgb, var(--light) 88%, white);
 }
 
 .accent-card .stat-label,
@@ -3027,9 +3281,9 @@ watch(
   padding: 18px;
   border-radius: 26px;
   background:
-    linear-gradient(135deg, rgba(255, 252, 247, 0.78), rgba(236, 211, 182, 0.36)),
-    radial-gradient(circle at top right, rgba(187, 77, 51, 0.12), transparent 34%);
-  border: 1px solid rgba(139, 115, 85, 0.12);
+    linear-gradient(135deg, color-mix(in srgb, var(--panel-soft-bg) 92%, transparent), color-mix(in srgb, var(--accent-soft) 64%, transparent)),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 18%, transparent), transparent 34%);
+  border: 1px solid var(--panel-border);
   transition: transform 0.22s ease, border-color 0.22s ease, background-color 0.22s ease;
 }
 
@@ -3043,7 +3297,7 @@ watch(
 .region-metrics div {
   padding: 12px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.56);
+  background: color-mix(in srgb, var(--button-bg) 84%, transparent);
 }
 
 .region-metrics strong {
@@ -3054,7 +3308,7 @@ watch(
 
 .region-metrics span,
 .region-card p {
-  color: rgba(36, 26, 19, 0.62);
+  color: var(--text-muted);
   font-size: 0.86rem;
 }
 
@@ -3073,18 +3327,18 @@ watch(
 .year-select {
   width: 100%;
   min-height: 42px;
-  border: 1px solid rgba(139, 115, 85, 0.14);
+  border: 1px solid var(--panel-border);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--button-bg);
   padding: 10px 12px;
   font: inherit;
-  color: #241a13;
+  color: var(--text-main);
 }
 
 .search-input:focus,
 .year-select:focus {
-  outline: 2px solid rgba(187, 77, 51, 0.16);
-  border-color: rgba(187, 77, 51, 0.26);
+  outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .chip-group,
@@ -3100,10 +3354,10 @@ watch(
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  border: 1px solid rgba(139, 115, 85, 0.12);
+  border: 1px solid var(--panel-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  color: #241a13;
+  background: var(--button-bg);
+  color: var(--button-text);
   cursor: pointer;
   transition: all 0.25s ease;
 }
@@ -3111,8 +3365,8 @@ watch(
 .chip span {
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(187, 77, 51, 0.08);
-  color: rgba(187, 77, 51, 0.9);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: 0.82rem;
 }
 
@@ -3150,8 +3404,8 @@ watch(
 }
 
 .chip.active {
-  background: rgba(187, 77, 51, 0.12);
-  border-color: rgba(187, 77, 51, 0.24);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .timeline-list,
@@ -3167,24 +3421,24 @@ watch(
   width: 100%;
   text-align: left;
   padding: 14px 16px;
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  border: 1px solid var(--panel-border);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.65);
+  background: color-mix(in srgb, var(--button-bg) 88%, transparent);
   cursor: pointer;
   transition: all 0.25s ease;
 }
 
 .timeline-item.active,
 .memory-item.active {
-  background: rgba(187, 77, 51, 0.12);
-  border-color: rgba(187, 77, 51, 0.24);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .timeline-item small,
 .memory-item small {
   display: block;
   margin-bottom: 4px;
-  color: rgba(157, 106, 47, 0.9);
+  color: color-mix(in srgb, var(--primary) 86%, var(--accent));
 }
 
 .timeline-item strong,
@@ -3197,8 +3451,8 @@ watch(
 .empty-block {
   padding: 16px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.55);
-  color: rgba(36, 26, 19, 0.64);
+  background: color-mix(in srgb, var(--button-bg) 72%, transparent);
+  color: var(--text-muted);
 }
 
 /* 空数据引导卡片 */
@@ -3213,12 +3467,34 @@ watch(
 }
 
 .empty-guide-card {
+  position: relative;
   max-width: 420px;
   padding: 32px;
   border-radius: 32px;
   text-align: center;
   pointer-events: auto;
   margin-top: -80px;
+}
+
+.guide-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--panel-border);
+  border-radius: 50%;
+  background: var(--button-bg);
+  color: var(--button-text);
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.guide-close:hover {
+  transform: rotate(8deg) scale(1.04);
+  background: rgba(187, 77, 51, 0.12);
 }
 
 .guide-icon {
@@ -3234,7 +3510,7 @@ watch(
 
 .empty-guide-card p {
   margin: 0 0 24px;
-  color: rgba(36, 26, 19, 0.7);
+  color: var(--text-muted);
   line-height: 1.6;
 }
 
@@ -3256,8 +3532,8 @@ watch(
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2f2116 0%, #6e4928 100%);
-  color: #fff8ef;
+  background: linear-gradient(135deg, var(--dark) 0%, var(--primary) 100%);
+  color: color-mix(in srgb, var(--light) 88%, white);
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -3266,7 +3542,7 @@ watch(
 
 .step-text {
   font-size: 0.85rem;
-  color: rgba(36, 26, 19, 0.7);
+  color: var(--text-muted);
 }
 
 /* Toast 提示 */
@@ -3343,20 +3619,63 @@ watch(
 
 .stage-subcopy {
   margin: 8px 0 0;
-  color: rgba(36, 26, 19, 0.68);
+  color: var(--text-muted);
   line-height: 1.6;
 }
 
 .map-stage-body {
   position: relative;
+  isolation: isolate;
   flex: 1;
   min-height: 560px;
   overflow: hidden;
   border-radius: 26px;
+  background: var(--map-stage-bg);
+  border: 1px solid color-mix(in srgb, var(--map-skin-border) 28%, transparent);
+}
+
+.map-stage-body::before,
+.map-stage-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.map-stage-body::before {
+  z-index: 0;
+  opacity: 0.45;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.13) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px);
+  background-size: 58px 58px;
+  mask-image: radial-gradient(circle at center, black, transparent 78%);
+}
+
+.map-stage-body::after {
+  z-index: 1;
+  box-shadow: inset 0 0 80px rgba(31, 21, 13, 0.16);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(244, 235, 223, 0.56)),
-    radial-gradient(circle at top right, rgba(187, 77, 51, 0.12), transparent 22%);
-  border: 1px solid rgba(139, 115, 85, 0.1);
+    radial-gradient(circle at 50% 48%, transparent 0, transparent 40%, rgba(255, 255, 255, 0.2) 75%),
+    radial-gradient(circle at 82% 16%, var(--map-skin-glow), transparent 26%);
+}
+
+.map-stage-body.skin-night::before {
+  opacity: 0.22;
+  background-image:
+    radial-gradient(circle, rgba(255, 235, 190, 0.72) 0 1px, transparent 1.5px),
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 120px 120px, 64px 64px, 64px 64px;
+}
+
+.map-stage-body.skin-night {
+  --map-panel-bg: rgba(8, 13, 22, 0.9);
+}
+
+.map-stage-body.skin-night .context-pill,
+.map-stage-body.skin-night .overlay-toggle {
+  background: rgba(255, 236, 196, 0.12);
 }
 
 .map-stage-body.transitioning .map-canvas {
@@ -3365,6 +3684,12 @@ watch(
 }
 
 .map-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
   transition: filter 0.25s ease, transform 0.25s ease;
 }
 
@@ -3391,7 +3716,7 @@ watch(
   border-radius: 999px;
   background: rgba(255, 252, 247, 0.88);
   border: 1px solid rgba(139, 115, 85, 0.12);
-  color: rgba(36, 26, 19, 0.78);
+  color: var(--text-main);
 }
 
 .map-overlay-card,
@@ -3406,23 +3731,80 @@ watch(
   left: 18px;
   top: 18px;
   max-width: 24rem;
-  background: rgba(255, 252, 247, 0.82);
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  background: var(--map-panel-bg);
+  border: 1px solid color-mix(in srgb, var(--map-skin-border) 32%, transparent);
+  box-shadow: 0 18px 42px rgba(36, 26, 19, 0.13);
+  backdrop-filter: blur(18px);
+  color: var(--map-skin-label);
+  transition: max-width 0.22s ease, padding 0.22s ease, background 0.22s ease, transform 0.22s ease;
+}
+
+.map-overlay-card.collapsed {
+  max-width: min(21rem, calc(100% - 36px));
+  padding: 12px 14px;
+}
+
+.map-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.map-overlay-head:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--map-skin-border) 44%, transparent);
+  outline-offset: 3px;
+  border-radius: 14px;
 }
 
 .map-overlay-card h3 {
   margin: 0 0 10px;
   font-family: 'Noto Serif SC', serif;
   font-size: 1.3rem;
+  color: var(--map-skin-label);
+}
+
+.map-overlay-card.collapsed h3 {
+  margin-bottom: 0;
+  font-size: 1.05rem;
+}
+
+.map-overlay-card p {
+  color: color-mix(in srgb, var(--map-skin-label) 76%, transparent);
+}
+
+.overlay-toggle {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--map-skin-border) 26%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--map-panel-bg) 78%, white);
+  color: var(--map-skin-label);
+  font-size: 0.76rem;
+  padding: 5px 9px;
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.map-overlay-head:hover .overlay-toggle {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--map-skin-border) 46%, transparent);
 }
 
 .floating-badge {
   display: inline-flex;
-  margin-bottom: 10px;
+  margin-bottom: 0;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(187, 77, 51, 0.1);
-  color: rgba(187, 77, 51, 0.95);
+  background: color-mix(in srgb, var(--map-skin-border) 16%, transparent);
+  color: var(--map-skin-label);
   font-size: 0.78rem;
 }
 
@@ -3436,14 +3818,9 @@ watch(
 .context-pill {
   padding: 8px 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(139, 115, 85, 0.1);
-  color: rgba(36, 26, 19, 0.78);
-}
-
-.map-canvas {
-  width: 100%;
-  height: 100%;
+  background: color-mix(in srgb, var(--map-panel-bg) 78%, white);
+  border: 1px solid color-mix(in srgb, var(--map-skin-border) 20%, transparent);
+  color: var(--map-skin-label);
 }
 
 .map-tooltip {
@@ -3486,14 +3863,19 @@ watch(
   margin-bottom: 12px;
   padding: 12px 14px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.56);
-  color: rgba(36, 26, 19, 0.68);
+  background: color-mix(in srgb, var(--button-bg) 72%, transparent);
+  color: var(--text-muted);
 }
 
 .legend-card {
   right: 18px;
   bottom: 18px;
   min-width: 180px;
+  background: var(--map-panel-bg);
+  border: 1px solid color-mix(in srgb, var(--map-skin-border) 28%, transparent);
+  backdrop-filter: blur(18px);
+  color: var(--map-skin-label);
+  box-shadow: 0 18px 42px rgba(36, 26, 19, 0.13);
 }
 
 .timeline-board {
@@ -3507,8 +3889,8 @@ watch(
   padding: 22px;
   overflow: hidden;
   border-radius: 24px;
-  background: rgba(255, 252, 247, 0.86);
-  border: 1px solid rgba(139, 115, 85, 0.12);
+  background: color-mix(in srgb, var(--panel-strong-bg) 92%, transparent);
+  border: 1px solid var(--panel-border);
   backdrop-filter: blur(16px);
 }
 
@@ -3521,7 +3903,7 @@ watch(
 .timeline-board-header p {
   max-width: 44rem;
   margin: 0;
-  color: rgba(36, 26, 19, 0.62);
+  color: var(--text-muted);
 }
 
 .timeline-board-list {
@@ -3576,7 +3958,7 @@ watch(
 .timeline-board-item span,
 .timeline-board-item small,
 .timeline-board-item p {
-  color: rgba(36, 26, 19, 0.58);
+  color: var(--text-muted);
 }
 
 .timeline-board-item strong {
@@ -3597,7 +3979,7 @@ watch(
   align-items: center;
   gap: 10px;
   margin-top: 8px;
-  color: rgba(36, 26, 19, 0.72);
+  color: color-mix(in srgb, var(--map-skin-label) 82%, transparent);
 }
 
 .legend-dot,
@@ -3765,13 +4147,13 @@ watch(
 
 .cluster-item:hover {
   transform: translateY(-2px);
-  border-color: rgba(187, 77, 51, 0.24);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .cluster-item small {
   display: block;
   margin-bottom: 4px;
-  color: rgba(157, 106, 47, 0.9);
+  color: color-mix(in srgb, var(--primary) 86%, var(--accent));
 }
 
 .cluster-item strong {
@@ -3781,7 +4163,7 @@ watch(
 
 .cluster-item p {
   margin: 0;
-  color: rgba(36, 26, 19, 0.68);
+  color: var(--text-muted);
 }
 
 .full-width {
@@ -3831,8 +4213,8 @@ watch(
 .helper-card {
   padding: 16px;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.58);
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  background: color-mix(in srgb, var(--button-bg) 72%, transparent);
+  border: 1px solid var(--panel-border);
 }
 
 .helper-card strong {
@@ -3842,7 +4224,7 @@ watch(
 }
 
 .helper-card-accent {
-  background: linear-gradient(135deg, rgba(187, 77, 51, 0.12), rgba(255, 255, 255, 0.62));
+  background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--button-bg) 76%, transparent));
 }
 
 .form-grid,
@@ -3868,17 +4250,17 @@ watch(
 
 .field-control {
   width: 100%;
-  border: 1px solid rgba(139, 115, 85, 0.14);
+  border: 1px solid var(--panel-border);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--button-bg);
   padding: 14px 16px;
   font: inherit;
-  color: #241a13;
+  color: var(--text-main);
 }
 
 .field-control:focus {
-  outline: 2px solid rgba(187, 77, 51, 0.16);
-  border-color: rgba(187, 77, 51, 0.26);
+  outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .textarea {
@@ -3886,18 +4268,19 @@ watch(
 }
 
 .quick-tag {
-  border: 1px solid rgba(157, 106, 47, 0.14);
+  border: 1px solid var(--panel-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--button-bg);
+  color: var(--button-text);
   padding: 10px 12px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .upload-box {
-  border: 1.5px dashed rgba(157, 106, 47, 0.36);
+  border: 1.5px dashed color-mix(in srgb, var(--primary) 42%, transparent);
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.48);
+  background: color-mix(in srgb, var(--button-bg) 62%, transparent);
   padding: 24px;
   text-align: center;
   cursor: pointer;
@@ -3906,8 +4289,8 @@ watch(
 
 .upload-box.dragover,
 .upload-box:hover {
-  border-color: rgba(187, 77, 51, 0.5);
-  background: rgba(187, 77, 51, 0.05);
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .upload-box strong {
@@ -3950,23 +4333,33 @@ watch(
 }
 
 .theme-card {
-  border: 1px solid rgba(139, 115, 85, 0.12);
+  border: 1px solid var(--panel-border);
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.65);
+  background: color-mix(in srgb, var(--button-bg) 82%, transparent);
   padding: 14px;
   cursor: pointer;
+  color: var(--text-main);
+  text-align: left;
+  transition: transform 0.22s ease, border-color 0.22s ease, background 0.22s ease;
 }
 
 .theme-card.active {
-  border-color: rgba(187, 77, 51, 0.24);
-  background: rgba(187, 77, 51, 0.08);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: var(--accent-soft);
+}
+
+.theme-card small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  line-height: 1.5;
 }
 
 .theme-preview {
   height: 70px;
   border-radius: 16px;
   margin-bottom: 10px;
-  background: var(--preview-light);
+  background: var(--preview-bg);
   position: relative;
   overflow: hidden;
 }
@@ -4099,19 +4492,53 @@ watch(
   }
 }
 
-@media (max-width: 1380px) {
+@media (min-width: 1440px) {
+  .workspace {
+    grid-template-columns: minmax(290px, 360px) minmax(560px, 1fr) minmax(300px, 380px);
+  }
+}
+
+@media (max-width: 1320px) {
+  .app-shell {
+    padding: 18px;
+  }
+
+  .workspace {
+    grid-template-columns: minmax(240px, 300px) minmax(500px, 1fr) minmax(240px, 320px);
+    gap: 18px;
+  }
+
+  .workspace.empty-footprints {
+    grid-template-columns: minmax(560px, 1fr) minmax(320px, 460px);
+  }
+
+  .sidebar,
+  .detail-panel {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 1180px) {
   .app-shell {
     overflow-x: hidden;
     overflow-y: auto;
   }
 
   .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
     min-height: 0;
+  }
+
+  .workspace.empty-footprints {
+    grid-template-columns: 1fr;
   }
 
   .map-stage {
     min-height: 72vh;
+  }
+
+  .detail-panel {
+    grid-column: 1 / -1;
   }
 
   .map-stage-body {
@@ -4119,10 +4546,10 @@ watch(
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .app-shell {
     padding: 16px;
-    padding-bottom: 72px;
+    padding-bottom: 16px;
   }
 
   .workspace {
@@ -4133,10 +4560,6 @@ watch(
   .workspace .map-stage,
   .workspace .detail-panel {
     width: 100%;
-  }
-
-  .mobile-hidden {
-    display: none !important;
   }
 
   .topbar {
@@ -4176,9 +4599,14 @@ watch(
   }
 }
 
-@media (max-width: 820px) {
+@media (max-width: 768px) {
   .app-shell {
     padding: 16px;
+    padding-bottom: 112px;
+  }
+
+  .mobile-hidden {
+    display: none !important;
   }
 
   .map-stage {
@@ -4229,17 +4657,13 @@ watch(
     padding: 14px;
   }
 
-  .map-overlay-card p {
-    display: none;
-  }
-
   .context-pills {
     margin-top: 10px;
   }
 
   .legend-card {
     right: 12px;
-    bottom: 12px;
+    bottom: 76px;
     min-width: 0;
     padding: 12px;
   }
@@ -4263,7 +4687,7 @@ watch(
 @media (max-width: 520px) {
   .app-shell {
     padding: 12px;
-    padding-bottom: 72px;
+    padding-bottom: 112px;
   }
 
   .topbar,
@@ -4340,9 +4764,9 @@ watch(
   z-index: 200;
   display: flex;
   justify-content: space-around;
-  padding: 8px 0;
-  background: rgba(255, 252, 247, 0.95);
-  border-top: 1px solid rgba(139, 115, 85, 0.12);
+  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--panel-strong-bg) 94%, transparent);
+  border-top: 1px solid var(--panel-border);
   backdrop-filter: blur(16px);
 }
 
@@ -4355,15 +4779,15 @@ watch(
   border: none;
   border-radius: 12px;
   background: transparent;
-  color: rgba(36, 26, 19, 0.7);
+  color: var(--text-muted);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .nav-item:hover,
 .nav-item.active {
-  background: rgba(187, 77, 51, 0.1);
-  color: #b54c33;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .nav-item:disabled {
@@ -4382,6 +4806,7 @@ watch(
 /* 手机模式下的 workspace */
 .workspace.mobile-mode {
   min-height: calc(100vh - 140px);
+  padding-bottom: 24px;
 }
 
 .workspace.mobile-mode .sidebar,
