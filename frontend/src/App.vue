@@ -51,7 +51,7 @@
 
       <div class="topbar-actions">
         <button v-if="currentCityArea" class="ghost-btn" @click="backToProvince">返回城市</button>
-        <button v-if="currentProvince" class="ghost-btn" @click="backToChina">返回全国</button>
+        <button v-if="currentProvince" class="ghost-btn" @click="backToChina">返回世界</button>
         <button class="ghost-btn" @click="showThemePanel = true">切换风格</button>
         <button
           v-if="!editMode.isAuthenticated"
@@ -279,6 +279,7 @@
         </div>
 
         <div
+          ref="mapStageBodyRef"
           class="map-stage-body"
           :class="[`skin-${activeMapSkin}`, { transitioning: mapTransitioning, 'timeline-mode': viewMode === 'timeline' }]"
           :style="mapStageStyle"
@@ -303,7 +304,7 @@
             </div>
           </div>
 
-          <div ref="mapRef" class="map-canvas" :class="{ muted: viewMode === 'timeline' }"></div>
+          <div ref="mapRef" class="maplibre-container" :class="{ muted: viewMode === 'timeline' }"></div>
           <transition name="map-wash">
             <div v-if="mapTransitioning" class="map-transition-overlay">
               <span>{{ transitionText }}</span>
@@ -602,13 +603,13 @@
               <div
                 class="upload-box"
                 :class="{ dragover: isDragover }"
-                @click="triggerUpload"
+                @click="triggerAddUpload"
                 @dragover.prevent="isDragover = true"
                 @dragleave="isDragover = false"
                 @drop.prevent="onDrop"
               >
                 <input
-                  ref="uploadInput"
+                  ref="addUploadInput"
                   hidden
                   type="file"
                   multiple
@@ -713,13 +714,13 @@
               <div
                 class="upload-box"
                 :class="{ dragover: isDragover }"
-                @click="triggerUpload"
+                @click="triggerEditUpload"
                 @dragover.prevent="isDragover = true"
                 @dragleave="isDragover = false"
                 @drop.prevent="onDrop"
               >
                 <input
-                  ref="uploadInput"
+                  ref="editUploadInput"
                   hidden
                   type="file"
                   multiple
@@ -988,8 +989,12 @@ const placesStore = usePlacesStore()
 const editMode = useEditStore()
 
 const mapRef = ref(null)
-const uploadInput = ref(null)
-const chartInstance = ref(null)
+const mapStageBodyRef = ref(null)
+const addUploadInput = ref(null)
+const editUploadInput = ref(null)
+let mapInstance = null
+let maplibreGlModule = null
+let provinceLabelMarkers = []
 
 const showThemePanel = ref(false)
 const showPasswordModal = ref(false)
@@ -1047,11 +1052,14 @@ const currentProvince = ref(null)
 const currentCityArea = ref(null)
 const provinceGeoCache = ref({})
 const districtGeoCache = ref({})
+const chinaGeoCache = ref(null)
 const hoverLabel = ref(null)
 const tooltipPosition = ref({ x: 0, y: 0 })
-let echartsLib = null
 let mapResizeObserver = null
 let mapResizeTimer = null
+
+let globeAutoRotate = true
+let globeRotateTimer = null
 
 const formData = ref(createEmptyForm())
 const editData = ref({
@@ -1291,24 +1299,9 @@ function createEmptyForm() {
   }
 }
 
-async function loadECharts() {
-  if (echartsLib) return echartsLib
-
-  const [echartsCore, charts, components, renderers] = await Promise.all([
-    import('echarts/core'),
-    import('echarts/charts'),
-    import('echarts/components'),
-    import('echarts/renderers'),
-  ])
-
-  const { use, init, registerMap } = echartsCore
-  const { ScatterChart, EffectScatterChart, LinesChart } = charts
-  const { GeoComponent } = components
-  const { CanvasRenderer } = renderers
-
-  use([ScatterChart, EffectScatterChart, LinesChart, GeoComponent, CanvasRenderer])
-  echartsLib = { init, registerMap }
-  return echartsLib
+async function loadMapLibreGL() {
+  const maplibreGl = await import('maplibre-gl')
+  return maplibreGl
 }
 
 function normalizeRegionName(name) {
@@ -1418,13 +1411,13 @@ const appStyle = computed(() => {
 const currentViewName = computed(() => {
   if (currentCityArea.value) return `${currentCityArea.value.name} 的角落`
   if (currentProvince.value) return `${currentProvince.value.name} 的一路风景`
-  return '我们的足迹地图'
+  return '我们的旅行星球'
 })
 
 const currentViewBadge = computed(() => {
   if (currentCityArea.value) return '区县记忆'
   if (currentProvince.value) return '城市漫游'
-  return '全国相册'
+  return '世界相册'
 })
 
 const currentViewDescription = computed(() => {
@@ -1434,11 +1427,11 @@ const currentViewDescription = computed(() => {
   if (currentProvince.value) {
     return '这一省里藏着很多次出发。点开城市，就能看见更贴近当时心情的地方。'
   }
-  return '从第一次出发到下一次抵达，把你们一起走过的地方，慢慢点亮成一张会呼吸的地图。'
+  return '从第一座城市到下一片大陆，把你们一起抵达过的地方，慢慢点亮成一颗会呼吸的星球。'
 })
 
 const breadcrumbTrail = computed(() => {
-  const trail = [{ id: 'china', label: '全国', active: !currentProvince.value && !currentCityArea.value }]
+  const trail = [{ id: 'china', label: '世界', active: !currentProvince.value && !currentCityArea.value }]
   if (currentProvince.value) {
     trail.push({ id: 'province', label: currentProvince.value.name, active: !currentCityArea.value })
   }
@@ -1451,7 +1444,7 @@ const breadcrumbTrail = computed(() => {
 const mapStageTitle = computed(() => {
   if (currentCityArea.value) return `${currentCityArea.value.name} · 细碎日光`
   if (currentProvince.value) return `${currentProvince.value.name} · 城市片段`
-  return '中国足迹长卷'
+  return '世界足迹星球'
 })
 
 const currentActionHint = computed(() => {
@@ -1463,25 +1456,25 @@ const currentActionHint = computed(() => {
   if (currentProvince.value) {
     return '点开一座城市，看看这趟旅程在更细的地方留下了什么。'
   }
-  return '从整张地图开始，沿着你们的脚步，慢慢靠近每一段回忆。'
+  return '拖动旋转地球，滚轮自由缩放；足迹、照片和旅行动线会沿着经纬度浮在星球表面。'
 })
 
 const currentLayerMetric = computed(() => {
   if (currentCityArea.value) return `${availableDistricts.value.length || 0} 个区县单元`
   if (currentProvince.value) return `${availableCities.value.length || 0} 个城市单元`
-  return `${placesStore.provinces.length || 0} 个省级单元`
+  return `${filteredCities.value.length || placesStore.cities.length || 0} 个世界坐标`
 })
 
 const currentActionShort = computed(() => {
   if (currentCityArea.value) return '把回忆放进角落'
   if (currentProvince.value) return '走进城市里面'
-  return '从一片省域开始'
+  return '拖动这颗星球'
 })
 
 const mapOverlayTitle = computed(() => {
   if (currentCityArea.value) return '这座城，有你们的具体坐标'
   if (currentProvince.value) return '每座城市，都是一段不同的章节'
-  return '把一起走过的中国，慢慢点亮'
+  return '把一起走过的世界，慢慢点亮'
 })
 
 const mapOverlayDescription = computed(() => {
@@ -1491,7 +1484,7 @@ const mapOverlayDescription = computed(() => {
   if (currentProvince.value) {
     return '省份像一本翻开的章节，城市是页码，区县是夹在里面的票根和照片。'
   }
-  return '这不是路线打卡表，而是一份共同生活的地理索引：去过哪里，也记得为什么难忘。'
+  return '这不是路线打卡表，而是一份共同生活的地理索引：去过哪里，也记得为什么难忘；以后走到世界任何城市，都能继续落在这颗星球上。'
 })
 
 const emptyDetailTitle = computed(() => {
@@ -1580,7 +1573,7 @@ const filteredCities = computed(() => {
 const regionStatsTitle = computed(() => {
   if (currentCityArea.value) return `${currentCityArea.value.name} 区县记忆概览`
   if (currentProvince.value) return `${currentProvince.value.name} 旅行密度`
-  return '全国旅行资产'
+  return '世界旅行资产'
 })
 
 const regionStats = computed(() => {
@@ -1813,8 +1806,12 @@ async function submitPassword() {
   authError.value = editMode.error || '登录失败'
 }
 
-function triggerUpload() {
-  uploadInput.value?.click()
+function triggerAddUpload() {
+  addUploadInput.value?.click()
+}
+
+function triggerEditUpload() {
+  editUploadInput.value?.click()
 }
 
 function addFiles(files) {
@@ -2040,88 +2037,115 @@ function closeFootprintPanel() {
 }
 
 function focusMapOnFootprint(city) {
-  if (!chartInstance.value) return
-  const targetZoom = currentCityArea.value ? 3.8 : currentProvince.value ? 3 : 1.8
-  chartInstance.value.setOption({
-    geo: {
-      center: [city.longitude, city.latitude],
-      zoom: targetZoom,
-    },
-  })
+  if (!mapInstance) return
+  globeAutoRotate = false
+  const targetZoom = currentCityArea.value ? 12 : currentProvince.value ? 8 : 5
+  mapInstance.flyTo({ center: [Number(city.longitude), Number(city.latitude)], zoom: targetZoom, duration: 1200 })
+}
+
+function resetGlobeView() {
+  globeAutoRotate = true
+  if (!mapInstance) return
+  mapInstance.flyTo({ center: [104, 36], zoom: 2, duration: 1500 })
+}
+
+function getDefaultMapZoom() {
+  if (currentCityArea.value) return 12
+  if (currentProvince.value) return 7
+  return 3
+}
+
+function getMinMapZoom() {
+  if (currentCityArea.value) return 10
+  if (currentProvince.value) return 5
+  return 1
+}
+
+function getCurrentMapZoom() {
+  return mapInstance?.getZoom() || getDefaultMapZoom()
+}
+
+function clampMapZoom(zoom) {
+  return Math.min(Math.max(zoom, getMinMapZoom()), 18)
+}
+
+function applyMapZoom(zoom) {
+  if (!mapInstance) return
+  mapInstance.setZoom(clampMapZoom(zoom))
+}
+
+function setMapZoom(zoom) {
+  if (!mapInstance) return
+  const target = clampMapZoom(zoom)
+  mapInstance.setZoom(target)
 }
 
 function zoomIn() {
-  if (!chartInstance.value) return
-  const option = chartInstance.value.getOption()
-  const currentZoom = option.geo?.[0]?.zoom || 1.2
-  chartInstance.value.setOption({
-    geo: {
-      zoom: Math.min(currentZoom * 1.25, 9),
-    },
-  })
+  setMapZoom(getCurrentMapZoom() * 1.3)
 }
 
 function zoomOut() {
-  if (!chartInstance.value) return
-  const option = chartInstance.value.getOption()
-  const currentZoom = option.geo?.[0]?.zoom || 1.2
-  chartInstance.value.setOption({
-    geo: {
-      zoom: Math.max(currentZoom / 1.25, currentCityArea.value ? 1 : currentProvince.value ? 1.2 : 0.9),
-    },
-  })
+  setMapZoom(getCurrentMapZoom() / 1.3)
+}
+
+function handleMapWheel(event) {
+  if (viewMode.value !== 'map' || !mapInstance) return
+  event.preventDefault()
+  event.stopPropagation()
+  const currentZoom = mapInstance.getZoom()
+  const ratio = event.deltaY < 0 ? 1.15 : 1 / 1.15
+  mapInstance.setZoom(clampMapZoom(currentZoom * ratio))
+  globeAutoRotate = false
 }
 
 function resetView() {
-  if (!chartInstance.value) return
+  resetGlobeView()
+  if (!mapInstance) return
 
   if (currentCityArea.value) {
-    chartInstance.value.setOption({
-      geo: {
-        center: currentCityArea.value.center,
-        zoom: 1.2,
-      },
-    })
+    mapInstance.flyTo({ center: currentCityArea.value.center, zoom: 12, duration: 800 })
     return
   }
 
   if (currentProvince.value) {
-    chartInstance.value.setOption({
-      geo: {
-        center: [currentProvince.value.center_lon, currentProvince.value.center_lat],
-        zoom: 1.8,
-      },
-    })
+    mapInstance.flyTo({ center: [currentProvince.value.center_lon, currentProvince.value.center_lat], zoom: 7, duration: 800 })
     return
   }
 
-  chartInstance.value.setOption({
-    geo: {
-      center: [104, 36],
-      zoom: 1.15,
-    },
-  })
+  mapInstance.flyTo({ center: [104, 36], zoom: 3, duration: 800 })
 }
 
 async function loadProvinceMap(province) {
-  if (!province?.adcode) return
+  if (!province?.adcode || !mapInstance) return
   isLoading.value = true
   loadingText.value = `进入 ${province.name}...`
   mapTransitioning.value = true
   transitionText.value = `进入 ${province.name}`
+  globeAutoRotate = false
 
   try {
+    // 加载省级 GeoJSON 用于高亮显示
     if (!provinceGeoCache.value[province.adcode]) {
       const response = await fetch(`/provinces/${province.adcode}.json`)
       provinceGeoCache.value[province.adcode] = await response.json()
     }
 
-    echartsLib.registerMap(`province-${province.adcode}`, provinceGeoCache.value[province.adcode])
+    // 添加省级边界图层
+    updateProvinceBoundaryLayer(provinceGeoCache.value[province.adcode])
+
     currentProvince.value = province
     currentCityArea.value = null
     activeFilter.value = 'all'
     closeFootprintPanel()
-    updateMapView()
+
+    // 飞到省份中心
+    mapInstance.flyTo({
+      center: [province.center_lon, province.center_lat],
+      zoom: 7,
+      duration: 1200,
+    })
+
+    updateFootprintMarkers()
   } finally {
     isLoading.value = false
     window.setTimeout(() => {
@@ -2132,20 +2156,24 @@ async function loadProvinceMap(province) {
 
 async function loadDistrictMap(cityFeature) {
   const cityAdcode = cityFeature?.properties?.adcode ? String(cityFeature.properties.adcode) : ''
-  if (!cityAdcode) return
+  if (!cityAdcode || !mapInstance) return
 
   isLoading.value = true
   loadingText.value = `进入 ${cityFeature.properties?.name || ''}...`
   mapTransitioning.value = true
   transitionText.value = `进入 ${normalizeRegionName(cityFeature.properties?.name || '')}`
+  globeAutoRotate = false
 
   try {
+    // 加载区县级 GeoJSON
     if (!districtGeoCache.value[cityAdcode]) {
       const response = await fetch(`/api/places/geo/cities/${cityAdcode}/districts`)
       districtGeoCache.value[cityAdcode] = await response.json()
     }
 
-    echartsLib.registerMap(`district-${cityAdcode}`, districtGeoCache.value[cityAdcode])
+    // 更新区县边界图层
+    updateDistrictBoundaryLayer(districtGeoCache.value[cityAdcode])
+
     currentCityArea.value = {
       name: normalizeRegionName(cityFeature.properties?.name || ''),
       adcode: cityAdcode,
@@ -2153,7 +2181,16 @@ async function loadDistrictMap(cityFeature) {
     }
     activeFilter.value = 'all'
     closeFootprintPanel()
-    updateMapView()
+
+    // 飞到区县中心
+    const center = cityFeature.properties?.center || cityFeature.properties?.centroid || [currentProvince.value.center_lon, currentProvince.value.center_lat]
+    mapInstance.flyTo({
+      center: center,
+      zoom: 12,
+      duration: 1200,
+    })
+
+    updateFootprintMarkers()
   } finally {
     isLoading.value = false
     window.setTimeout(() => {
@@ -2163,25 +2200,50 @@ async function loadDistrictMap(cityFeature) {
 }
 
 function backToChina() {
+  if (!mapInstance) return
   mapTransitioning.value = true
-  transitionText.value = '返回全国'
+  transitionText.value = '返回世界'
   currentProvince.value = null
   currentCityArea.value = null
   activeFilter.value = 'all'
   closeFootprintPanel()
-  updateMapView()
+
+  // 移除省级和区县级边界图层
+  removeBoundaryLayers()
+  globeAutoRotate = true
+
+  // 飞回全球视角
+  mapInstance.flyTo({
+    center: [104, 36],
+    zoom: 3,
+    duration: 1500,
+  })
+
+  updateFootprintMarkers()
   window.setTimeout(() => {
     mapTransitioning.value = false
   }, 260)
 }
 
 function backToProvince() {
+  if (!mapInstance || !currentProvince.value) return
   mapTransitioning.value = true
   transitionText.value = `返回 ${currentProvince.value?.name || '省份'}`
   currentCityArea.value = null
   activeFilter.value = 'all'
   closeFootprintPanel()
-  updateMapView()
+
+  // 移除区县边界图层，恢复省级边界
+  removeDistrictBoundaryLayer()
+
+  // 飞回省级视角
+  mapInstance.flyTo({
+    center: [currentProvince.value.center_lon, currentProvince.value.center_lat],
+    zoom: 7,
+    duration: 1200,
+  })
+
+  updateFootprintMarkers()
   window.setTimeout(() => {
     mapTransitioning.value = false
   }, 260)
@@ -2239,253 +2301,781 @@ function getTransportSymbol(type) {
   }
 }
 
+function colorWithAlpha(color, alpha) {
+  if (!color) return `rgba(255, 255, 255, ${alpha})`
+  if (color.startsWith('rgba')) return color
+  if (color.startsWith('rgb')) return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`)
+  if (!color.startsWith('#')) return color
+
+  const hex = String(color).slice(1)
+  const fullHex = hex.length === 3
+    ? hex.split('').map((char) => char + char).join('')
+    : hex
+  const value = Number.parseInt(fullHex, 16)
+  if (Number.isNaN(value)) return color
+
+  const red = (value >> 16) & 255
+  const green = (value >> 8) & 255
+  const blue = value & 255
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`
+}
+
+function hexToRgb(color) {
+  if (!color) return [1, 1, 1]
+  const rgbMatch = String(color).match(/rgba?\(([^)]+)\)/i)
+  if (rgbMatch) {
+    const [red = 255, green = 255, blue = 255] = rgbMatch[1]
+      .split(',')
+      .map((value) => Number.parseFloat(value.trim()))
+    return [red / 255, green / 255, blue / 255]
+  }
+  if (!String(color).startsWith('#')) return [1, 1, 1]
+  const hex = color.slice(1)
+  const fullHex = hex.length === 3
+    ? hex.split('').map((char) => char + char).join('')
+    : hex
+  const value = Number.parseInt(fullHex, 16)
+  if (Number.isNaN(value)) return [1, 1, 1]
+  return [
+    ((value >> 16) & 255) / 255,
+    ((value >> 8) & 255) / 255,
+    (value & 255) / 255,
+  ]
+}
+
 function requestMapResize(delay = 60) {
   if (mapResizeTimer) {
     window.clearTimeout(mapResizeTimer)
   }
   mapResizeTimer = window.setTimeout(() => {
     mapResizeTimer = null
-    chartInstance.value?.resize()
+    mapInstance?.resize()
   }, delay)
 }
 
-function getMapBaseOption() {
-  const skin = activeMapSkinConfig.value
-  const mapName = currentCityArea.value
-    ? `district-${currentCityArea.value.adcode}`
-    : currentProvince.value
-      ? `province-${currentProvince.value.adcode}`
-      : 'china'
+// ========== MapLibre GL 地图函数 ==========
 
-  const center = currentCityArea.value
-    ? currentCityArea.value.center
-    : currentProvince.value
-      ? [currentProvince.value.center_lon, currentProvince.value.center_lat]
-      : [104, 36]
+function getTileSource(skinId) {
+  // 根据主题选择不同的瓦片源
+  switch (skinId) {
+    case 'night':
+      return {
+        type: 'raster',
+        tiles: ['https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png'],
+        tileSize: 256,
+      }
+    case 'warm':
+      return {
+        type: 'raster',
+        tiles: ['https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
+        tileSize: 256,
+      }
+    case 'vintage':
+      return {
+        type: 'raster',
+        tiles: ['https://basemaps.cartocdn.com/rastertiles/light_nolabels/{z}/{x}/{y}.png'],
+        tileSize: 256,
+      }
+    case 'aero':
+      return {
+        type: 'raster',
+        tiles: ['https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png'],
+        tileSize: 256,
+      }
+    default:
+      return {
+        type: 'raster',
+        tiles: ['https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png'],
+        tileSize: 256,
+      }
+  }
+}
+
+function getOSMLayerPaint(skinId) {
+  // 根据主题调整瓦片显示效果
+  switch (skinId) {
+    case 'night':
+      // 星图主题：深邃夜空效果
+      return {
+        'raster-saturation': -0.2,
+        'raster-brightness-min': 0.12,
+        'raster-brightness-max': 0.55,
+        'raster-opacity': 0.7,
+      }
+    case 'warm':
+      // 暖砂主题：傍晚暖色调
+      return {
+        'raster-saturation': 0.15,
+        'raster-brightness-min': 0.12,
+        'raster-brightness-max': 0.92,
+        'raster-opacity': 0.8,
+        'raster-hue-rotate': 25, // 橙暖色调偏移
+      }
+    case 'vintage':
+      // 复古主题：旧纸质地图效果（叠加棕色滤镜）
+      return {
+        'raster-saturation': -0.4,
+        'raster-brightness-min': 0.22,
+        'raster-brightness-max': 0.8,
+        'raster-opacity': 0.75,
+        'raster-hue-rotate': 35, // 棕褐色调
+      }
+    case 'aero':
+      // 航线主题：清晰明亮
+      return {
+        'raster-saturation': -0.08,
+        'raster-brightness-min': 0.08,
+        'raster-brightness-max': 0.95,
+        'raster-opacity': 0.82,
+      }
+    default:
+      return {
+        'raster-opacity': 0.8,
+      }
+  }
+}
+
+function getLabelHaloColor(skinId) {
+  // 根据主题返回标签光晕颜色
+  switch (skinId) {
+    case 'night':
+      return 'rgba(8, 13, 22, 0.85)' // 深色背景
+    case 'warm':
+      return 'rgba(255, 248, 236, 0.85)' // 暖色背景
+    case 'vintage':
+      return 'rgba(244, 234, 210, 0.85)' // 复古浅色背景
+    case 'aero':
+      return 'rgba(247, 252, 255, 0.85)' // 清爽浅蓝背景
+    default:
+      return 'rgba(255, 255, 255, 0.78)'
+  }
+}
+
+function buildMaplibreStyle() {
+  const skin = activeMapSkinConfig.value
   const routeColors = skin.routes
 
   return {
-    backgroundColor: 'transparent',
-    tooltip: { show: false },
-    geo: {
-      map: mapName,
-      roam: true,
-      center,
-      zoom: currentCityArea.value ? 1.2 : currentProvince.value ? 1.8 : 1.15,
-      layoutCenter: ['50%', '52%'],
-      layoutSize: currentCityArea.value ? '95%' : currentProvince.value ? '92%' : '86%',
-      scaleLimit: {
-        min: currentCityArea.value ? 0.9 : currentProvince.value ? 0.8 : 0.9,
-        max: 9,
+    version: 8,
+    name: 'journey-map',
+    projection: { type: 'globe' },
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+    sources: {
+      'osm-tiles': getTileSource(activeMapSkin.value),
+      'footprints': {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
       },
-      label: { show: false },
-      itemStyle: {
-        areaColor: skin.land,
-        borderColor: skin.border,
-        borderWidth: activeMapSkin.value === 'night' ? 0.9 : 1,
-        shadowColor: skin.glow,
-        shadowBlur: activeMapSkin.value === 'night' ? 28 : 18,
-        shadowOffsetY: activeMapSkin.value === 'night' ? 8 : 6,
+      'journeys': {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
       },
-      emphasis: {
-        label: { show: false },
-        itemStyle: {
-          areaColor: skin.landAlt,
-          borderColor: skin.borderStrong,
-          borderWidth: 2,
-          shadowColor: skin.glow,
-          shadowBlur: 24,
-        },
+      'province-boundary': {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      },
+      'district-boundary': {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      },
+      'china-boundary': {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
       },
     },
-    series: [
+    layers: [
+      // 基础底图
       {
-        type: 'lines',
-        coordinateSystem: 'geo',
-        zlevel: 1,
-        data: buildLineData(filteredCities.value),
-        effect: {
-          show: filteredCities.value.length > 1,
-          period: 6,
-          trailLength: 0.1,
-          symbolSize: 5,
+        id: 'background',
+        type: 'background',
+        paint: { 'background-color': skin.sea || '#f5f5f5' },
+      },
+      {
+        id: 'osm-layer',
+        type: 'raster',
+        source: 'osm-tiles',
+        paint: getOSMLayerPaint(activeMapSkin.value),
+      },
+      // 全国省份边界填充（globe视图下显示）
+      {
+        id: 'china-fill',
+        type: 'fill',
+        source: 'china-boundary',
+        paint: {
+          'fill-color': skin.landAlt || skin.land,
+          'fill-opacity': (!currentProvince.value && !currentCityArea.value) ? 0.35 : 0,
         },
-        lineStyle: {
-          color: skin.line,
-          width: activeMapSkin.value === 'night' ? 1.8 : 1.5,
-          curveness: 0.12,
-          opacity: activeMapSkin.value === 'night' ? 0.74 : 0.56,
+      },
+      // 全国省份边界线
+      {
+        id: 'china-line',
+        type: 'line',
+        source: 'china-boundary',
+        paint: {
+          'line-color': skin.borderStrong || skin.border,
+          'line-width': 1.5,
+          'line-opacity': (!currentProvince.value && !currentCityArea.value) ? 0.7 : 0,
+        },
+      },
+      // 全国省份标签
+      {
+        id: 'china-labels',
+        type: 'symbol',
+        source: 'china-boundary',
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-font': ['Noto Sans Regular'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 10, 5, 14],
+          'text-anchor': 'center',
+          'text-max-width': 6,
+        },
+        paint: {
+          'text-color': skin.label,
+          'text-halo-color': getLabelHaloColor(activeMapSkin.value),
+          'text-halo-width': 2,
+          'text-opacity': (!currentProvince.value && !currentCityArea.value) ? 0.85 : 0,
+        },
+      },
+      // 省级边界填充
+      {
+        id: 'province-fill',
+        type: 'fill',
+        source: 'province-boundary',
+        paint: {
+          'fill-color': skin.landAlt || skin.land,
+          'fill-opacity': currentProvince.value ? 0.4 : 0,
+        },
+      },
+      // 省级边界线
+      {
+        id: 'province-line',
+        type: 'line',
+        source: 'province-boundary',
+        paint: {
+          'line-color': skin.borderStrong || skin.border,
+          'line-width': 2,
+          'line-opacity': currentProvince.value ? 0.8 : 0,
+        },
+      },
+      // 区县级边界填充
+      {
+        id: 'district-fill',
+        type: 'fill',
+        source: 'district-boundary',
+        paint: {
+          'fill-color': skin.landAlt || skin.land,
+          'fill-opacity': currentCityArea.value ? 0.5 : 0,
+        },
+      },
+      // 区县级边界线
+      {
+        id: 'district-line',
+        type: 'line',
+        source: 'district-boundary',
+        paint: {
+          'line-color': skin.borderStrong || skin.border,
+          'line-width': 1.5,
+          'line-opacity': currentCityArea.value ? 0.7 : 0,
         },
       },
       // 旅程路线 - 飞机
       {
-        type: 'lines',
-        name: 'journey-flight',
-        coordinateSystem: 'geo',
-        zlevel: 1,
-        data: buildJourneyLineData(placesStore.journeys, 'flight'),
-        effect: {
-          show: placesStore.journeys.some(j => j.transport_type === 'flight'),
-          period: 8,
-          trailLength: 0.15,
-          symbol: getTransportSymbol('flight'),
-          symbolSize: 12,
-          color: routeColors.flight,
-        },
-        lineStyle: {
-          color: routeColors.flight,
-          width: 2.5,
-          curveness: 0.5,
-          opacity: 0.85,
-        },
-        emphasis: {
-          lineStyle: {
-            width: 4,
-            opacity: 1,
-          },
+        id: 'journey-flight',
+        type: 'line',
+        source: 'journeys',
+        filter: ['==', ['get', 'transport'], 'flight'],
+        paint: {
+          'line-color': routeColors.flight,
+          'line-width': 2.5,
+          'line-opacity': 0.85,
         },
       },
       // 旅程路线 - 火车
       {
-        type: 'lines',
-        name: 'journey-train',
-        coordinateSystem: 'geo',
-        zlevel: 1,
-        data: buildJourneyLineData(placesStore.journeys, 'train'),
-        effect: {
-          show: placesStore.journeys.some(j => j.transport_type === 'train'),
-          period: 10,
-          trailLength: 0.2,
-          symbol: getTransportSymbol('train'),
-          symbolSize: 10,
-          color: routeColors.train,
-        },
-        lineStyle: {
-          color: routeColors.train,
-          width: 2,
-          type: 'dashed',
-          curveness: 0,
-          opacity: 0.75,
-        },
-        emphasis: {
-          lineStyle: {
-            width: 3,
-            opacity: 1,
-          },
+        id: 'journey-train',
+        type: 'line',
+        source: 'journeys',
+        filter: ['==', ['get', 'transport'], 'train'],
+        paint: {
+          'line-color': routeColors.train,
+          'line-width': 2,
+          'line-dasharray': [2, 2],
+          'line-opacity': 0.75,
         },
       },
       // 旅程路线 - 汽车
       {
-        type: 'lines',
-        name: 'journey-car',
-        coordinateSystem: 'geo',
-        zlevel: 1,
-        data: buildJourneyLineData(placesStore.journeys, 'car'),
-        effect: {
-          show: placesStore.journeys.some(j => j.transport_type === 'car'),
-          period: 12,
-          trailLength: 0.1,
-          symbol: getTransportSymbol('car'),
-          symbolSize: 8,
-          color: routeColors.car,
-        },
-        lineStyle: {
-          color: routeColors.car,
-          width: 2.5,
-          curveness: 0.2,
-          opacity: 0.7,
-        },
-        emphasis: {
-          lineStyle: {
-            width: 4,
-            opacity: 1,
-          },
+        id: 'journey-car',
+        type: 'line',
+        source: 'journeys',
+        filter: ['==', ['get', 'transport'], 'car'],
+        paint: {
+          'line-color': routeColors.car,
+          'line-width': 2.5,
+          'line-opacity': 0.7,
         },
       },
       // 旅程路线 - 轮船
       {
-        type: 'lines',
-        name: 'journey-ship',
-        coordinateSystem: 'geo',
-        zlevel: 1,
-        data: buildJourneyLineData(placesStore.journeys, 'ship'),
-        effect: {
-          show: placesStore.journeys.some(j => j.transport_type === 'ship'),
-          period: 14,
-          trailLength: 0.25,
-          symbol: getTransportSymbol('ship'),
-          symbolSize: 10,
-          color: routeColors.ship,
-        },
-        lineStyle: {
-          color: routeColors.ship,
-          width: 2,
-          curveness: 0.35,
-          opacity: 0.75,
-        },
-        emphasis: {
-          lineStyle: {
-            width: 3,
-            opacity: 1,
-          },
+        id: 'journey-ship',
+        type: 'line',
+        source: 'journeys',
+        filter: ['==', ['get', 'transport'], 'ship'],
+        paint: {
+          'line-color': routeColors.ship,
+          'line-width': 2,
+          'line-opacity': 0.75,
         },
       },
+      // 足迹连接线
       {
-        type: 'scatter',
-        coordinateSystem: 'geo',
-        zlevel: 2,
-        symbolSize: (value, params) => {
-          const count = params.data?.symbolSizeValue || 1
-          return Math.min(24, 12 + count * 3 + ((value[2] || 0) > 0 ? 2 : 0))
-        },
-        data: buildScatterData(footprintGroups.value),
-        itemStyle: {
-          color: skin.point,
-          borderColor: activeMapSkin.value === 'night' ? 'rgba(255,235,195,0.86)' : 'rgba(255,255,255,0.84)',
-          borderWidth: 2,
-          shadowBlur: activeMapSkin.value === 'night' ? 26 : 20,
-          shadowColor: skin.pointHalo,
-        },
-        label: {
-          show: true,
-          position: 'right',
-          distance: 8,
-          color: skin.label,
-          fontFamily: 'Noto Serif SC',
-          fontSize: 12,
-          formatter: '{b}',
+        id: 'footprint-lines',
+        type: 'line',
+        source: 'footprints',
+        filter: ['==', ['get', 'type'], 'line'],
+        paint: {
+          'line-color': skin.line,
+          'line-width': 1.5,
+          'line-opacity': 0.56,
         },
       },
+      // 足迹标记点
       {
-        type: 'effectScatter',
-        coordinateSystem: 'geo',
-        zlevel: 3,
-        rippleEffect: {
-          brushType: 'stroke',
-          scale: 4,
-          period: 4,
+        id: 'footprint-points',
+        type: 'circle',
+        source: 'footprints',
+        filter: ['==', ['get', 'type'], 'point'],
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 8, 10, 16],
+          'circle-color': skin.point,
+          'circle-stroke-color': activeMapSkin.value === 'night' ? 'rgba(255,235,195,0.86)' : 'rgba(255,255,255,0.84)',
+          'circle-stroke-width': 2,
+          'circle-opacity': 0.95,
         },
-        symbolSize: (value, params) => {
-          const count = params.data?.symbolSizeValue || 1
-          return Math.min(14, 6 + count * 2 + ((value[2] || 0) > 0 ? 1 : 0))
+      },
+      // 足迹标签
+      {
+        id: 'footprint-labels',
+        type: 'symbol',
+        source: 'footprints',
+        filter: ['==', ['get', 'type'], 'point'],
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-font': ['Noto Sans Regular'],
+          'text-size': 12,
+          'text-anchor': 'top',
+          'text-offset': [0, 1],
+          'text-max-width': 8,
         },
-        data: buildScatterData(footprintGroups.value),
-        itemStyle: {
-          color: skin.point,
-          opacity: activeMapSkin.value === 'night' ? 0.86 : 0.72,
+        paint: {
+          'text-color': skin.label,
+          'text-halo-color': getLabelHaloColor(activeMapSkin.value),
+          'text-halo-width': 2,
         },
       },
     ],
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
   }
 }
 
-function updateMapView() {
-  if (!chartInstance.value) return
-  chartInstance.value.setOption(getMapBaseOption(), {
-    notMerge: true,
-    lazyUpdate: false,
+function buildFootprintGeoJSON() {
+  const features = []
+
+  // 添加足迹点
+  footprintGroups.value.forEach((group) => {
+    if (!group.longitude || !group.latitude) return
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [group.longitude, group.latitude],
+      },
+      properties: {
+        type: 'point',
+        name: group.label,
+        id: group.records[0]?.id,
+        records: JSON.stringify(group.records),
+        count: group.records.length,
+      },
+    })
   })
-  chartInstance.value.resize()
+
+  // 添加连接线（按时间顺序）
+  const sorted = filteredCities.value
+    .filter((city) => city.longitude && city.latitude)
+    .sort((a, b) => new Date(a.visited_at || 0) - new Date(b.visited_at || 0))
+
+  for (let i = 1; i < sorted.length; i++) {
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [sorted[i - 1].longitude, sorted[i - 1].latitude],
+          [sorted[i].longitude, sorted[i].latitude],
+        ],
+      },
+      properties: { type: 'line' },
+    })
+  }
+
+  return { type: 'FeatureCollection', features }
+}
+
+function buildJourneyGeoJSON() {
+  const features = []
+
+  (placesStore.journeys || []).forEach((journey) => {
+    if (!journey.from_lon || !journey.from_lat || !journey.to_lon || !journey.to_lat) return
+
+    // 创建大圆弧线（近似）
+    const from = [journey.from_lon, journey.from_lat]
+    const to = [journey.to_lon, journey.to_lat]
+    const midLon = (from[0] + to[0]) / 2
+    const midLat = (from[1] + to[1]) / 2
+    const distance = Math.hypot(to[0] - from[0], to[1] - from[1])
+    const arcHeight = distance * 0.15
+
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [from, [midLon, midLat + arcHeight], to],
+      },
+      properties: {
+        transport: journey.transport_type,
+        id: journey.id,
+        from_city: journey.from_city_name,
+        to_city: journey.to_city_name,
+      },
+    })
+  })
+
+  return { type: 'FeatureCollection', features }
+}
+
+function updateFootprintMarkers() {
+  if (!mapInstance) return
+
+  const footprintSource = mapInstance.getSource('footprints')
+  if (footprintSource) {
+    footprintSource.setData(buildFootprintGeoJSON())
+  }
+
+  const journeySource = mapInstance.getSource('journeys')
+  if (journeySource) {
+    journeySource.setData(buildJourneyGeoJSON())
+  }
+}
+
+function updateProvinceBoundaryLayer(geojson) {
+  if (!mapInstance) return
+
+  const source = mapInstance.getSource('province-boundary')
+  if (source) {
+    source.setData(geojson)
+  }
+}
+
+function updateDistrictBoundaryLayer(geojson) {
+  if (!mapInstance) return
+
+  const source = mapInstance.getSource('district-boundary')
+  if (source) {
+    source.setData(geojson)
+  }
+}
+
+function removeBoundaryLayers() {
+  if (!mapInstance) return
+
+  clearProvinceLabelMarkers()
+
+  const provinceSource = mapInstance.getSource('province-boundary')
+  if (provinceSource) {
+    provinceSource.setData({ type: 'FeatureCollection', features: [] })
+  }
+
+  const districtSource = mapInstance.getSource('district-boundary')
+  if (districtSource) {
+    districtSource.setData({ type: 'FeatureCollection', features: [] })
+  }
+}
+
+function removeDistrictBoundaryLayer() {
+  if (!mapInstance) return
+
+  const source = mapInstance.getSource('district-boundary')
+  if (source) {
+    source.setData({ type: 'FeatureCollection', features: [] })
+  }
+}
+
+function updateChinaBoundaryLayer(geojson) {
+  if (!mapInstance || !maplibreGlModule) return
+
+  const source = mapInstance.getSource('china-boundary')
+  if (source) {
+    // 为每个省份添加 name 属性
+    const enhancedGeojson = {
+      type: 'FeatureCollection',
+      features: geojson.features.map(f => ({
+        ...f,
+        properties: {
+          ...f.properties,
+          name: normalizeRegionName(f.properties?.name || ''),
+        },
+      })),
+    }
+    source.setData(enhancedGeojson)
+
+    // 使用 Marker 显示省份中文名称（绕过 glyphs 问题）
+    clearProvinceLabelMarkers()
+    const skin = activeMapSkinConfig.value
+    const showLabels = !currentProvince.value && !currentCityArea.value
+
+    if (showLabels) {
+      enhancedGeojson.features.forEach(f => {
+        const name = f.properties?.name
+        if (!name) return
+
+        // 计算省份中心点
+        const center = f.properties?.center || getFeatureCenter(f)
+        if (!center) return
+
+        // 创建 HTML 标注元素
+        const el = document.createElement('div')
+        el.className = 'province-label-marker'
+        el.textContent = name
+        el.style.cssText = `
+          color: ${skin.label};
+          font-size: 11px;
+          font-weight: 500;
+          background: ${getLabelHaloColor(activeMapSkin.value)};
+          padding: 2px 6px;
+          border-radius: 3px;
+          white-space: nowrap;
+          pointer-events: none;
+          opacity: 0.85;
+        `
+
+        // 使用 MapLibre Marker
+        const marker = new maplibreGlModule.Marker(el)
+          .setLngLat(center)
+          .addTo(mapInstance)
+        provinceLabelMarkers.push(marker)
+      })
+    }
+  }
+}
+
+function getFeatureCenter(feature) {
+  // 计算 GeoJSON feature 的中心点
+  const geometry = feature.geometry
+  if (!geometry) return null
+
+  const coords = geometry.coordinates
+  if (!coords || coords.length === 0) return null
+
+  let sumLon = 0, sumLat = 0, count = 0
+
+  function processCoords(c) {
+    if (typeof c[0] === 'number') {
+      sumLon += c[0]
+      sumLat += c[1]
+      count++
+    } else {
+      c.forEach(processCoords)
+    }
+  }
+
+  processCoords(coords)
+  if (count === 0) return null
+  return [sumLon / count, sumLat / count]
+}
+
+function clearProvinceLabelMarkers() {
+  provinceLabelMarkers.forEach(m => m.remove())
+  provinceLabelMarkers = []
+}
+
+function updateMapView() {
+  if (!mapInstance) return
+  mapInstance.setStyle(buildMaplibreStyle())
+
+  // 重新设置边界数据
+  if (chinaGeoCache.value) {
+    updateChinaBoundaryLayer(chinaGeoCache.value)
+  }
+  if (currentProvince.value && provinceGeoCache.value[currentProvince.value.adcode]) {
+    updateProvinceBoundaryLayer(provinceGeoCache.value[currentProvince.value.adcode])
+  }
+  if (currentCityArea.value && districtGeoCache.value[currentCityArea.value.adcode]) {
+    updateDistrictBoundaryLayer(districtGeoCache.value[currentCityArea.value.adcode])
+  }
+
+  updateFootprintMarkers()
+}
+
+function startAutoRotate() {
+  if (!mapInstance || globeRotateTimer) return
+  globeRotateTimer = window.setInterval(() => {
+    if (!globeAutoRotate || !mapInstance) return
+    const bearing = mapInstance.getBearing()
+    mapInstance.setBearing(bearing + 0.2)
+  }, 50)
+}
+
+function stopAutoRotate() {
+  if (globeRotateTimer) {
+    window.clearInterval(globeRotateTimer)
+    globeRotateTimer = null
+  }
+}
+
+async function initMap() {
+  if (!mapRef.value) return
+
+  const maplibreGl = await loadMapLibreGL()
+  maplibreGlModule = maplibreGl // 存储模块供后续使用
+
+  mapInstance = new maplibreGl.Map({
+    container: mapRef.value,
+    style: buildMaplibreStyle(),
+    center: [104, 36],
+    zoom: 3,
+    maxZoom: 18,
+    minZoom: 1,
+    projection: 'globe',
+    attributionControl: false,
+  })
+
+  // 添加导航控件
+  mapInstance.addControl(new maplibreGl.NavigationControl({ showCompass: false }), 'bottom-right')
+
+  // 地图加载完成后的初始化
+  mapInstance.on('load', async () => {
+    updateFootprintMarkers()
+
+    // 加载全国省份边界数据
+    try {
+      const response = await fetch('/china_full.json')
+      if (response.ok) {
+        const chinaGeoJson = await response.json()
+        chinaGeoCache.value = chinaGeoJson
+        updateChinaBoundaryLayer(chinaGeoJson)
+      }
+    } catch (err) {
+      console.warn('加载全国边界数据失败:', err)
+    }
+
+    // 开始自动旋转（globe 模式）
+    startAutoRotate()
+
+    // 设置鼠标交互时停止自动旋转
+    mapInstance.on('mousedown', () => {
+      globeAutoRotate = false
+    })
+
+    mapInstance.on('touchstart', () => {
+      globeAutoRotate = false
+    })
+  })
+
+  // 点击足迹点
+  mapInstance.on('click', 'footprint-points', (e) => {
+    const properties = e.features[0]?.properties
+    if (!properties) return
+
+    globeAutoRotate = false
+
+    if (properties.count > 1) {
+      const records = JSON.parse(properties.records || '[]')
+      openCluster(records, properties.name)
+    } else {
+      selectFootprint(Number(properties.id))
+    }
+  })
+
+  // 点击全国省份边界区域（globe视图）
+  mapInstance.on('click', 'china-fill', async (e) => {
+    if (!currentProvince.value && !currentCityArea.value) {
+      // 从全国视图点击进入省份
+      const provinceName = e.features[0]?.properties?.name || ''
+      const province = getProvinceByName(provinceName)
+      if (province) {
+        globeAutoRotate = false
+        await loadProvinceMap(province)
+      }
+    }
+  })
+
+  // 鼠标悬停在省份上显示指针
+  mapInstance.on('mouseenter', 'china-fill', () => {
+    if (!currentProvince.value && !currentCityArea.value) {
+      mapInstance.getCanvas().style.cursor = 'pointer'
+    }
+  })
+
+  mapInstance.on('mouseleave', 'china-fill', () => {
+    mapInstance.getCanvas().style.cursor = 'grab'
+  })
+
+  // 点击省份边界区域（省份视图进入区县）
+  mapInstance.on('click', 'province-fill', async (e) => {
+    if (currentProvince.value && !currentCityArea.value) {
+      // 从省份视图点击进入区县，点击的feature就是区县
+      const feature = e.features[0]
+      if (feature) {
+        await loadDistrictMap(feature)
+      }
+    }
+  })
+
+  // 区县级边界悬停效果
+  mapInstance.on('mouseenter', 'district-fill', () => {
+    if (currentCityArea.value) {
+      mapInstance.getCanvas().style.cursor = 'pointer'
+    }
+  })
+
+  // 鼠标悬停效果
+  mapInstance.on('mouseenter', 'footprint-points', () => {
+    mapInstance.getCanvas().style.cursor = 'pointer'
+  })
+
+  mapInstance.on('mouseleave', 'footprint-points', () => {
+    mapInstance.getCanvas().style.cursor = 'grab'
+  })
+
+  // 省级边界悬停效果
+  mapInstance.on('mouseenter', 'province-fill', () => {
+    if (currentProvince.value && !currentCityArea.value) {
+      mapInstance.getCanvas().style.cursor = 'pointer'
+    }
+  })
+
+  mapInstance.on('mouseleave', 'province-fill', () => {
+    mapInstance.getCanvas().style.cursor = 'grab'
+  })
+
+  // 监听缩放变化，切换 globe/mercator 投影
+  mapInstance.on('zoom', () => {
+    const zoom = mapInstance.getZoom()
+    if (zoom > 5 && mapInstance.getProjection().type === 'globe') {
+      // 放大到一定程度时可以考虑切换到 mercator（可选）
+    }
+  })
+
+  // Resize 监听
+  mapResizeObserver?.disconnect()
+  mapResizeObserver = new ResizeObserver(() => requestMapResize(80))
+  mapResizeObserver.observe(mapRef.value)
+
+  mapStageBodyRef.value?.removeEventListener('wheel', handleMapWheel, true)
+  mapStageBodyRef.value?.addEventListener('wheel', handleMapWheel, { passive: false, capture: true })
+
+  window.addEventListener('resize', mobileResizeHandler)
 }
 
 // ========== 旅程相关函数 ==========
@@ -2610,14 +3200,14 @@ function selectJourneyOnMap(journey) {
   }
 
   // 在地图上高亮这条路线 - 移动视角到路线中间
-  if (chartInstance.value && journey.from_lon && journey.to_lon) {
-    const centerLon = (journey.from_lon + journey.to_lon) / 2
-    const centerLat = (journey.from_lat + journey.to_lat) / 2
-    chartInstance.value.setOption({
-      geo: {
-        center: [centerLon, centerLat],
-        zoom: 2.5,
-      },
+  if (mapInstance && journey.from_lon && journey.to_lon && journey.from_lat && journey.to_lat) {
+    globeAutoRotate = false
+    const centerLon = (Number(journey.from_lon) + Number(journey.to_lon)) / 2
+    const centerLat = (Number(journey.from_lat) + Number(journey.to_lat)) / 2
+    mapInstance.flyTo({
+      center: [centerLon, centerLat],
+      zoom: 6,
+      duration: 1200,
     })
   }
 }
@@ -2659,133 +3249,6 @@ async function confirmDeleteJourney(id) {
   }
 }
 
-async function initMap() {
-  if (!mapRef.value) return
-
-  echartsLib = await loadECharts()
-
-  const response = await fetch('/china_full.json')
-  const geoJson = await response.json()
-  echartsLib.registerMap('china', geoJson)
-
-  chartInstance.value = echartsLib.init(mapRef.value)
-  updateMapView()
-  await nextTick()
-  requestMapResize(120)
-  mapResizeObserver?.disconnect()
-  mapResizeObserver = new ResizeObserver(() => requestMapResize(80))
-  mapResizeObserver.observe(mapRef.value)
-
-  chartInstance.value.on('mouseover', 'geo', (params) => {
-    tooltipPosition.value = {
-      x: params.event.offsetX + 24,
-      y: params.event.offsetY - 24,
-    }
-
-    if (currentCityArea.value) {
-      hoverLabel.value = {
-        title: normalizeRegionName(params.name),
-        subtitle: editMode.isAuthenticated ? '点击添加或查看区县足迹' : '当前城市下的区县区域',
-      }
-      return
-    }
-
-    if (currentProvince.value) {
-      hoverLabel.value = {
-        title: normalizeRegionName(params.name),
-        subtitle: '点击进入区县视图',
-      }
-      return
-    }
-
-    const province = getProvinceByName(params.name)
-    if (province) {
-      const count = placesStore.cities.filter((city) => city.province_id === province.id).length
-      hoverLabel.value = {
-        title: province.name,
-        subtitle: `${count} 条城市足迹 · 点击进入`,
-      }
-    }
-  })
-
-  chartInstance.value.on('mouseout', 'geo', () => {
-    hoverLabel.value = null
-  })
-
-  chartInstance.value.on('click', 'geo', async (params) => {
-    if (currentCityArea.value) {
-      const districtName = normalizeRegionName(params.name)
-      const matches = placesStore.cities.filter(
-        (city) =>
-          city.city_adcode === currentCityArea.value.adcode &&
-          normalizeRegionName(city.district_name || '') === districtName,
-      )
-
-      if (matches.length > 1) {
-        openCluster(matches, `${currentCityArea.value.name} · ${districtName}`)
-        return
-      }
-
-      if (matches.length === 1) {
-        await selectFootprint(matches[0].id)
-        return
-      }
-
-      if (!editMode.isAuthenticated) return
-
-      const district = availableDistricts.value.find((item) => item.value === districtName)
-      formData.value = {
-        city_name: currentCityArea.value.name,
-        province_id: currentProvince.value.id,
-        province_name: currentProvince.value.name,
-        city_adcode: currentCityArea.value.adcode,
-        district_name: districtName,
-        district_adcode: district?.adcode || '',
-        visited_at: '',
-        description: '',
-        tags: '',
-        latitude: district?.center?.[1] ?? null,
-        longitude: district?.center?.[0] ?? null,
-      }
-      showAddPanel.value = true
-      return
-    }
-
-    if (currentProvince.value) {
-      const cityFeature = findCityFeatureByName(params.name)
-      if (cityFeature) {
-        await loadDistrictMap(cityFeature)
-      }
-      return
-    }
-
-    const province = getProvinceByName(params.name)
-    if (province) {
-      await loadProvinceMap(province)
-    }
-  })
-
-  chartInstance.value.on('click', 'series.scatter', async (params) => {
-    const records = params.data?.records || []
-    if (records.length > 1) {
-      openCluster(records, params.data.name)
-    } else if (records.length === 1) {
-      await selectFootprint(records[0].id)
-    }
-  })
-
-  chartInstance.value.on('click', 'series.effectScatter', async (params) => {
-    const records = params.data?.records || []
-    if (records.length > 1) {
-      openCluster(records, params.data.name)
-    } else if (records.length === 1) {
-      await selectFootprint(records[0].id)
-    }
-  })
-
-  window.addEventListener('resize', mobileResizeHandler)
-}
-
 onMounted(async () => {
   editMode.checkEditMode()
   isLoading.value = true
@@ -2810,12 +3273,17 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', mobileResizeHandler)
+  mapStageBodyRef.value?.removeEventListener('wheel', handleMapWheel, true)
   mapResizeObserver?.disconnect()
   if (mapResizeTimer) {
     window.clearTimeout(mapResizeTimer)
   }
+  stopAutoRotate()
+  clearProvinceLabelMarkers()
+  mapInstance?.remove()
+  mapInstance = null
+  maplibreGlModule = null
   clearPendingPhotos()
-  chartInstance.value?.dispose()
 })
 
 watch(viewMode, () => {
@@ -2837,6 +3305,7 @@ watch(
 
 watch(filteredCities, () => {
   updateMapView()
+  updateFootprintMarkers()
   if (selectedFootprint.value && !filteredCities.value.find((city) => city.id === selectedFootprint.value.id)) {
     closeFootprintPanel()
   }
@@ -2848,6 +3317,12 @@ watch(filteredCities, () => {
     }
   }
 }, { deep: true })
+
+watch(
+  () => placesStore.journeys,
+  () => updateFootprintMarkers(),
+  { deep: true },
+)
 
 watch(
   () => formData.value.city_name,
@@ -3606,7 +4081,7 @@ watch(
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-height: 680px;
+  min-height: 620px;
 }
 
 .map-stage-header {
@@ -3627,11 +4102,20 @@ watch(
   position: relative;
   isolation: isolate;
   flex: 1;
-  min-height: 560px;
+  min-height: 500px;
   overflow: hidden;
   border-radius: 26px;
   background: var(--map-stage-bg);
   border: 1px solid color-mix(in srgb, var(--map-skin-border) 28%, transparent);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    inset 0 -38px 90px rgba(20, 12, 6, 0.16),
+    0 22px 58px color-mix(in srgb, var(--dark) 20%, transparent);
+  cursor: grab;
+}
+
+.map-stage-body:active {
+  cursor: grabbing;
 }
 
 .map-stage-body::before,
@@ -3644,29 +4128,36 @@ watch(
 
 .map-stage-body::before {
   z-index: 0;
-  opacity: 0.45;
+  opacity: 0.52;
   background-image:
+    radial-gradient(ellipse at 50% 55%, transparent 0 44%, rgba(255, 255, 255, 0.12) 45%, transparent 46%),
+    repeating-radial-gradient(ellipse at 50% 55%, transparent 0 52px, rgba(255, 255, 255, 0.08) 54px, transparent 56px),
     linear-gradient(rgba(255, 255, 255, 0.13) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px);
-  background-size: 58px 58px;
+  background-size: 100% 100%, 100% 100%, 58px 58px, 58px 58px;
   mask-image: radial-gradient(circle at center, black, transparent 78%);
 }
 
 .map-stage-body::after {
   z-index: 1;
-  box-shadow: inset 0 0 80px rgba(31, 21, 13, 0.16);
+  box-shadow: inset 0 0 110px rgba(31, 21, 13, 0.24);
   background:
+    radial-gradient(ellipse at 38% 30%, rgba(255, 255, 255, 0.34), transparent 24%),
+    radial-gradient(ellipse at 62% 72%, rgba(0, 0, 0, 0.18), transparent 34%),
     radial-gradient(circle at 50% 48%, transparent 0, transparent 40%, rgba(255, 255, 255, 0.2) 75%),
     radial-gradient(circle at 82% 16%, var(--map-skin-glow), transparent 26%);
+  mix-blend-mode: soft-light;
 }
 
 .map-stage-body.skin-night::before {
   opacity: 0.22;
   background-image:
+    radial-gradient(ellipse at 50% 55%, transparent 0 44%, rgba(255, 235, 190, 0.14) 45%, transparent 46%),
+    repeating-radial-gradient(ellipse at 50% 55%, transparent 0 58px, rgba(255, 235, 190, 0.08) 60px, transparent 62px),
     radial-gradient(circle, rgba(255, 235, 190, 0.72) 0 1px, transparent 1.5px),
     linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-  background-size: 120px 120px, 64px 64px, 64px 64px;
+  background-size: 100% 100%, 100% 100%, 120px 120px, 64px 64px, 64px 64px;
 }
 
 .map-stage-body.skin-night {
@@ -3678,25 +4169,53 @@ watch(
   background: rgba(255, 236, 196, 0.12);
 }
 
-.map-stage-body.transitioning .map-canvas {
+.map-stage-body.transitioning .maplibre-container {
   filter: saturate(0.92) blur(1px);
-  transform: scale(0.995);
+  transform: translateZ(0) scale(1.01);
 }
 
-.map-canvas {
+.maplibre-container {
   position: absolute;
   inset: 0;
   z-index: 1;
   width: 100%;
   height: 100%;
   min-height: 100%;
+  transform: translateZ(0);
+  filter: drop-shadow(0 20px 32px color-mix(in srgb, var(--map-skin-glow) 46%, transparent));
   transition: filter 0.25s ease, transform 0.25s ease;
 }
 
-.map-canvas.muted {
+.maplibre-container.muted {
   opacity: 0.12;
   filter: blur(2px) saturate(0.78);
   pointer-events: none;
+}
+
+/* MapLibre GL 样式覆盖 */
+.maplibre-container .maplibregl-ctrl-group {
+  background: rgba(255, 248, 236, 0.82);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(139, 89, 54, 0.18);
+}
+
+.maplibre-container .maplibregl-ctrl-group button {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+}
+
+.maplibre-container .maplibregl-ctrl-group button + button {
+  border-top: 1px solid rgba(139, 89, 54, 0.14);
+}
+
+.map-stage-body.skin-night .maplibre-container .maplibregl-ctrl-group {
+  background: rgba(13, 19, 31, 0.76);
+  box-shadow: 0 4px 12px rgba(226, 184, 106, 0.18);
+}
+
+.map-stage-body.skin-night .maplibre-container .maplibregl-ctrl-group button + button {
+  border-top-color: rgba(226, 184, 106, 0.18);
 }
 
 .map-transition-overlay {
