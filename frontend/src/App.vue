@@ -284,6 +284,40 @@
           :class="[`skin-${activeMapSkin}`, { transitioning: mapTransitioning, 'timeline-mode': viewMode === 'timeline' }]"
           :style="mapStageStyle"
         >
+          <!-- 位置搜索框 -->
+          <div v-if="viewMode === 'map' && editMode.isAuthenticated" class="location-search-box">
+            <input
+              v-model="locationSearchQuery"
+              type="text"
+              placeholder="搜索位置..."
+              @input="handleLocationSearchInput"
+              @keyup.enter="performLocationSearch"
+            />
+            <button class="search-btn" @click="performLocationSearch" :disabled="!locationSearchQuery">
+              搜索
+            </button>
+            <transition name="fade">
+              <div v-if="showLocationSearchResults && locationSearchResults.length" class="search-results">
+                <button
+                  v-for="result in locationSearchResults"
+                  :key="result.place_id"
+                  class="search-result-item"
+                  @click="selectLocationSearchResult(result)"
+                >
+                  <strong>{{ result.display_name.split(',')[0] }}</strong>
+                  <small>{{ result.display_name.split(',').slice(1, 3).join(', ') }}</small>
+                </button>
+              </div>
+            </transition>
+            <transition name="fade">
+              <div
+                v-if="showLocationSearchResults"
+                class="search-results-backdrop"
+                @click="showLocationSearchResults = false"
+              ></div>
+            </transition>
+          </div>
+
           <div v-if="viewMode === 'map'" class="map-overlay-card" :class="{ collapsed: mapOverlayCollapsed }">
             <button
               class="map-overlay-head"
@@ -603,17 +637,17 @@
               <div
                 class="upload-box"
                 :class="{ dragover: isDragover }"
-                @click="triggerAddUpload"
                 @dragover.prevent="isDragover = true"
                 @dragleave="isDragover = false"
                 @drop.prevent="onDrop"
               >
                 <input
                   ref="addUploadInput"
-                  hidden
                   type="file"
                   multiple
                   accept="image/*"
+                  capture="environment"
+                  style="position: absolute; opacity: 0; width: 100%; height: 100%; top: 0; left: 0; cursor: pointer;"
                   @change="handleUpload"
                 />
                 <strong>点击或拖拽照片到这里</strong>
@@ -714,17 +748,17 @@
               <div
                 class="upload-box"
                 :class="{ dragover: isDragover }"
-                @click="triggerEditUpload"
                 @dragover.prevent="isDragover = true"
                 @dragleave="isDragover = false"
                 @drop.prevent="onDrop"
               >
                 <input
                   ref="editUploadInput"
-                  hidden
                   type="file"
                   multiple
                   accept="image/*"
+                  capture="environment"
+                  style="position: absolute; opacity: 0; width: 100%; height: 100%; top: 0; left: 0; cursor: pointer;"
                   @change="handleUpload"
                 />
                 <strong>点击或拖拽照片到这里</strong>
@@ -992,6 +1026,11 @@ const mapRef = ref(null)
 const mapStageBodyRef = ref(null)
 const addUploadInput = ref(null)
 const editUploadInput = ref(null)
+const locationSearchQuery = ref('')
+const locationSearchResults = ref([])
+const showLocationSearchResults = ref(false)
+const locationSearchDebounceTimer = ref(null)
+const searchMarker = ref(null)
 let mapInstance = null
 let maplibreGlModule = null
 let provinceLabelMarkers = []
@@ -1266,6 +1305,103 @@ const mapStageStyle = computed(() => ({
   '--map-skin-border': activeMapSkinConfig.value.border,
   '--map-skin-glow': activeMapSkinConfig.value.glow,
 }))
+
+// ========== 位置搜索功能 ==========
+
+function handleLocationSearchInput() {
+  // 清除之前的 debounce timer
+  if (locationSearchDebounceTimer.value) {
+    clearTimeout(locationSearchDebounceTimer.value)
+  }
+
+  // 设置新的 debounce
+  locationSearchDebounceTimer.value = setTimeout(() => {
+    if (locationSearchQuery.value.length >= 2) {
+      performLocationSearch()
+    } else {
+      locationSearchResults.value = []
+      showLocationSearchResults.value = false
+    }
+  }, 500)
+}
+
+async function performLocationSearch() {
+  if (!locationSearchQuery.value) return
+
+  try {
+    // 使用 Nominatim API (OpenStreetMap 的搜索服务)
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(locationSearchQuery.value)}&limit=5&accept-language=zh`
+    )
+    const data = await response.json()
+    locationSearchResults.value = data
+    showLocationSearchResults.value = true
+  } catch (error) {
+    console.warn('搜索失败:', error)
+    locationSearchResults.value = []
+  }
+}
+
+async function selectLocationSearchResult(result) {
+  showLocationSearchResults.value = false
+  locationSearchResults.value = []
+
+  const lat = parseFloat(result.lat)
+  const lon = parseFloat(result.lon)
+  const displayName = result.display_name
+
+  // 飞到搜索结果位置
+  if (mapInstance) {
+    mapInstance.flyTo({
+      center: [lon, lat],
+      zoom: 12,
+      duration: 1500,
+    })
+
+    // 移除之前的搜索标记
+    if (searchMarker.value) {
+      searchMarker.value.remove()
+    }
+
+    // 添加临时标记
+    if (maplibreGlModule) {
+      const el = document.createElement('div')
+      el.className = 'search-marker'
+      el.innerHTML = '📍'
+      el.style.cssText = 'font-size: 24px; cursor: pointer;'
+      searchMarker.value = new maplibreGlModule.Marker(el)
+        .setLngLat([lon, lat])
+        .addTo(mapInstance)
+    }
+  }
+
+  // 解析地址信息，填充表单
+  const addressParts = displayName.split(',')
+  const city_name = addressParts[0] || ''
+  const province_name = addressParts[1] || ''
+  const district_name = addressParts[2] || ''
+
+  // 查找匹配的省份
+  const matchedProvince = placesStore.provinces.find(p => {
+    const normalized = normalizeRegionName(p.name)
+    const normalizedSearch = normalizeRegionName(province_name)
+    return normalized.includes(normalizedSearch) || normalizedSearch.includes(normalized)
+  })
+
+  formData.value = {
+    ...formData.value,
+    city_name: city_name.trim(),
+    province_id: matchedProvince?.id || null,
+    province_name: province_name.trim(),
+    district_name: district_name.trim(),
+    latitude: lat,
+    longitude: lon,
+    visited_at: formData.value.visited_at || new Date().toISOString().split('T')[0],
+  }
+
+  // 打开添加面板
+  showAddPanel.value = true
+}
 
 function dismissEmptyGuide() {
   emptyGuideDismissed.value = true
@@ -1804,14 +1940,6 @@ async function submitPassword() {
     return
   }
   authError.value = editMode.error || '登录失败'
-}
-
-function triggerAddUpload() {
-  addUploadInput.value?.click()
-}
-
-function triggerEditUpload() {
-  editUploadInput.value?.click()
 }
 
 function addFiles(files) {
@@ -2356,38 +2484,19 @@ function requestMapResize(delay = 60) {
 // ========== MapLibre GL 地图函数 ==========
 
 function getTileSource(skinId) {
-  // 根据主题选择不同的瓦片源
+  // 根据主题选择不同的瓦片源（简化配置优化加载速度）
+  const baseUrl = 'https://basemaps.cartocdn.com/rastertiles'
   switch (skinId) {
     case 'night':
-      return {
-        type: 'raster',
-        tiles: ['https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png'],
-        tileSize: 256,
-      }
+      return { type: 'raster', tiles: [`${baseUrl}/dark_all/{z}/{x}/{y}.png`], tileSize: 256 }
     case 'warm':
-      return {
-        type: 'raster',
-        tiles: ['https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
-        tileSize: 256,
-      }
+      return { type: 'raster', tiles: [`${baseUrl}/voyager/{z}/{x}/{y}.png`], tileSize: 256 }
     case 'vintage':
-      return {
-        type: 'raster',
-        tiles: ['https://basemaps.cartocdn.com/rastertiles/light_nolabels/{z}/{x}/{y}.png'],
-        tileSize: 256,
-      }
+      return { type: 'raster', tiles: [`${baseUrl}/light_nolabels/{z}/{x}/{y}.png`], tileSize: 256 }
     case 'aero':
-      return {
-        type: 'raster',
-        tiles: ['https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png'],
-        tileSize: 256,
-      }
+      return { type: 'raster', tiles: [`${baseUrl}/light_all/{z}/{x}/{y}.png`], tileSize: 256 }
     default:
-      return {
-        type: 'raster',
-        tiles: ['https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png'],
-        tileSize: 256,
-      }
+      return { type: 'raster', tiles: [`${baseUrl}/light_all/{z}/{x}/{y}.png`], tileSize: 256 }
   }
 }
 
@@ -2948,6 +3057,8 @@ async function initMap() {
     minZoom: 1,
     projection: 'globe',
     attributionControl: false,
+    pixelRatio: Math.min(window.devicePixelRatio, 1.5), // 限制像素比，减少渲染开销
+    crossSourceCollisions: false, // 禁用跨源碰撞检测
   })
 
   // 添加导航控件
@@ -2956,18 +3067,6 @@ async function initMap() {
   // 地图加载完成后的初始化
   mapInstance.on('load', async () => {
     updateFootprintMarkers()
-
-    // 加载全国省份边界数据
-    try {
-      const response = await fetch('/china_full.json')
-      if (response.ok) {
-        const chinaGeoJson = await response.json()
-        chinaGeoCache.value = chinaGeoJson
-        updateChinaBoundaryLayer(chinaGeoJson)
-      }
-    } catch (err) {
-      console.warn('加载全国边界数据失败:', err)
-    }
 
     // 开始自动旋转（globe 模式）
     startAutoRotate()
@@ -2980,6 +3079,20 @@ async function initMap() {
     mapInstance.on('touchstart', () => {
       globeAutoRotate = false
     })
+
+    // 延迟加载全国省份边界数据（优化移动端加载速度）
+    setTimeout(async () => {
+      try {
+        const response = await fetch('/china_full.json')
+        if (response.ok) {
+          const chinaGeoJson = await response.json()
+          chinaGeoCache.value = chinaGeoJson
+          updateChinaBoundaryLayer(chinaGeoJson)
+        }
+      } catch (err) {
+        console.warn('加载全国边界数据失败:', err)
+      }
+    }, 500)
   })
 
   // 点击足迹点
@@ -4172,6 +4285,97 @@ watch(
 .map-stage-body.transitioning .maplibre-container {
   filter: saturate(0.92) blur(1px);
   transform: translateZ(0) scale(1.01);
+}
+
+/* 位置搜索框 */
+.location-search-box {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.location-search-box input {
+  flex: 1;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  outline: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.location-search-box input:focus {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+
+.location-search-box .search-btn {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: var(--light);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.location-search-box .search-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 11;
+}
+
+.search-results-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  background: transparent;
+}
+
+.search-result-item {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.search-result-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.search-result-item strong {
+  display: block;
+  font-size: 14px;
+  color: #333;
+}
+
+.search-result-item small {
+  display: block;
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
 }
 
 .maplibre-container {
