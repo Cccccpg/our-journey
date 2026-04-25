@@ -1,0 +1,56 @@
+@import url('https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@400;500;600;700&family=ZCOOL+XiaoWei&display=swap');
+
+:root {
+  /* Primary Palette - Romantic Rose */
+  --primary: #E8B4B8;
+  --accent: #FF6B6B;
+  --dark: #8B7355;
+  --light: #F8F4E8;
+
+  /* Extended Palette */
+  --primary-soft: #F5D5D8;
+  --accent-glow: rgba(255, 107, 107, 0.6);
+  --dark-muted: #A69480;
+  --light-warm: #FFF8F0;
+  --gold: #D4A574;
+  --gold-soft: rgba(212, 165, 116, 0.4);
+
+  /* Glass Effects */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-bg-heavy: rgba(255, 255, 255, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.25);
+  --glass-shadow: rgba(139, 115, 85, 0.08);
+
+  /* Shadows */
+  --shadow-soft: 0 4px 30px rgba(0, 0, 0, 0.08);
+  --shadow-medium: 0 8px 40px rgba(0, 0, 0, 0.12);
+  --shadow-strong: 0 16px 60px rgba(0, 0, 0, 0.18);
+  --shadow-glow: 0 0 40px var(--accent-glow);
+  --shadow-gold: 0 4px 20px var(--gold-soft);
+
+  /* Typography */
+  --font-display: 'Ma Shan Zheng', cursive;
+  --font-serif: 'Noto Serif SC', serif;
+  --font-body: 'ZCOOL XiaoWei', sans-serif;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+
+  /* Border Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-smooth: 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}

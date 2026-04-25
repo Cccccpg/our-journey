@@ -1,0 +1,87 @@
+/* 呼吸脉动动画 - 城市标记 */
+@keyframes breathe {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+.breathing {
+  animation: breathe 2s ease-in-out infinite;
+}
+
+/* 淡入动画 */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+/* 从底部滑入 */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(100px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.slide-up {
+  animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 弹性缩放 */
+@keyframes bounceScale {
+  0% { transform: scale(0.8); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.bounce-scale {
+  animation: bounceScale 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 发光效果 */
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 5px var(--accent); }
+  50% { box-shadow: 0 0 20px var(--accent), 0 0 40px var(--accent); }
+}
+
+.glowing {
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* 照片渐显 */
+@keyframes photoLoad {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.photo-loaded {
+  animation: photoLoad 0.6s ease-out forwards;
+}
+
+/* 平滑过渡 */
+.transition-all {
+  transition: all 0.3s ease;
+}
+
+/* Hover 微放大 */
+.hover-scale:hover {
+  transform: scale(1.05);
+}
+
+/* Hover 阴影加深 */
+.hover-shadow:hover {
+  box-shadow: var(--shadow-strong);
+}
