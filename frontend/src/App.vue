@@ -69,7 +69,7 @@
         </button>
         <button
           class="primary-btn"
-          :disabled="!editMode.isAuthenticated || !currentProvince"
+          :disabled="!editMode.isAuthenticated"
           @click="openQuickAdd"
         >
           添加足迹
@@ -1986,9 +1986,12 @@ function closeEditPanel() {
 }
 
 function openQuickAdd() {
-  if (!editMode.isAuthenticated || !currentProvince.value) return
-  formData.value.province_id = currentProvince.value.id
-  formData.value.province_name = currentProvince.value.name
+  if (!editMode.isAuthenticated) return
+  // 如果有当前省份，自动填充省份信息
+  if (currentProvince.value) {
+    formData.value.province_id = currentProvince.value.id
+    formData.value.province_name = currentProvince.value.name
+  }
   formData.value.city_name = currentCityArea.value?.name || ''
   formData.value.city_adcode = currentCityArea.value?.adcode || ''
   showAddPanel.value = true
