@@ -42,9 +42,12 @@ export const useEditStore = defineStore('edit', {
     async login(password) {
       try {
         this.error = null
-        const { data } = await authLogin(this.token, password)
+        const token = this.token || 'travel2024love'
+        const { data } = await authLogin(token, password)
         if (data.success) {
           localStorage.setItem('jwt', data.jwt)
+          this.token = token
+          this.isEditMode = true
           this.isAuthenticated = true
           this.showPasswordModal = false
         }

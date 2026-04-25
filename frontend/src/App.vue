@@ -54,9 +54,9 @@
         <button v-if="currentProvince" class="ghost-btn" @click="backToChina">返回全国</button>
         <button class="ghost-btn" @click="showThemePanel = true">主题切换</button>
         <button
-          v-if="editMode.isEditMode && !editMode.isAuthenticated"
+          v-if="!editMode.isAuthenticated"
           class="ghost-btn"
-          @click="showPasswordModal = true"
+          @click="openPasswordModal"
         >
           解锁编辑
         </button>
@@ -98,7 +98,7 @@
               <span class="step-text">添加足迹、照片和故事</span>
             </div>
           </div>
-          <button class="primary-btn" @click="showPasswordModal = true">开始记录</button>
+          <button class="primary-btn" @click="openPasswordModal">开始记录</button>
         </div>
       </div>
 
@@ -809,8 +809,8 @@
         <div class="modal-card panel panel-strong animate-scale-in">
           <div class="modal-header">
             <span class="eyebrow">Add Journey</span>
-            <h3>添加旅途路线</h3>
-            <p>记录从一个地点到另一个地点的旅程</p>
+            <h3>{{ editingJourney ? '编辑旅途路线' : '添加旅途路线' }}</h3>
+            <p>{{ editingJourney ? '调整这段旅程的交通与时间信息' : '记录从一个地点到另一个地点的旅程' }}</p>
           </div>
 
           <div class="journey-route-display">
@@ -885,7 +885,9 @@
 
           <div class="modal-actions">
             <button class="ghost-btn" @click="closeAddJourneyPanel">取消</button>
-            <button class="primary-btn" :disabled="!canSubmitJourney" @click="submitJourney">保存旅程</button>
+            <button class="primary-btn" :disabled="!canSubmitJourney" @click="submitJourney">
+              {{ editingJourney ? '更新旅程' : '保存旅程' }}
+            </button>
           </div>
         </div>
       </div>
@@ -1161,6 +1163,9 @@ function openCluster(records, label) {
   footprintPhotos.value = []
   placesStore.clearSelection()
   selectedCluster.value = { label, records }
+  if (isMobile.value) {
+    mobileView.value = 'detail'
+  }
 }
 
 function appendTag(mode, tag) {
@@ -1545,6 +1550,15 @@ function handleBreadcrumbClick(id) {
   }
 }
 
+function openPasswordModal() {
+  if (!editMode.token) {
+    editMode.token = 'travel2024love'
+  }
+  editMode.isEditMode = true
+  authError.value = ''
+  showPasswordModal.value = true
+}
+
 function findCityFeatureByName(name) {
   if (!currentProvince.value) return null
   const geoData = provinceGeoCache.value[currentProvince.value.adcode]
@@ -1757,6 +1771,9 @@ async function selectFootprint(id) {
 
     const city = placesStore.cities.find((item) => item.id === id)
     if (city) focusMapOnFootprint(city)
+    if (isMobile.value) {
+      mobileView.value = 'detail'
+    }
   } finally {
     isLoading.value = false
   }
@@ -2287,7 +2304,7 @@ function formatDuration(minutes) {
 }
 
 const filteredJourneys = computed(() => {
-  let journeys = placesStore.journeys || []
+  let journeys = (placesStore.journeys || []).slice()
   if (journeyFilter.value !== 'all') {
     journeys = journeys.filter(j => j.transport_type === journeyFilter.value)
   }
@@ -2302,6 +2319,7 @@ const canSubmitJourney = computed(() => {
 })
 
 function openAddJourney() {
+  editingJourney.value = null
   journeyFormData.value = {
     from_city_id: null,
     to_city_id: null,
@@ -2316,6 +2334,7 @@ function openAddJourney() {
 
 function closeAddJourneyPanel() {
   showAddJourneyPanel.value = false
+  editingJourney.value = null
 }
 
 async function submitJourney() {
@@ -2324,7 +2343,8 @@ async function submitJourney() {
   loadingText.value = '保存旅程中...'
 
   try {
-    await placesStore.addJourney({
+    const isEditing = Boolean(editingJourney.value?.id)
+    const payload = {
       from_city_id: journeyFormData.value.from_city_id,
       to_city_id: journeyFormData.value.to_city_id,
       transport_type: journeyFormData.value.transport_type,
@@ -2332,9 +2352,18 @@ async function submitJourney() {
       departure_time: journeyFormData.value.departure_time || null,
       arrival_time: journeyFormData.value.arrival_time || null,
       notes: journeyFormData.value.notes,
-    })
+    }
+
+    if (isEditing) {
+      await placesStore.updateJourney(editingJourney.value.id, payload)
+    } else {
+      await placesStore.addJourney(payload)
+    }
     closeAddJourneyPanel()
     updateMapView()
+    showToast(isEditing ? '旅程已更新' : '旅程已保存', 'success')
+  } catch (error) {
+    showToast('旅程保存失败，请重试', 'error')
   } finally {
     isLoading.value = false
   }
@@ -2343,6 +2372,9 @@ async function submitJourney() {
 function selectJourneyOnMap(journey) {
   selectedJourney.value = journey
   showJourneyDetail.value = true
+  if (isMobile.value) {
+    mobileView.value = 'map'
+  }
 
   // 在地图上高亮这条路线 - 移动视角到路线中间
   if (chartInstance.value && journey.from_lon && journey.to_lon) {
@@ -2386,6 +2418,9 @@ async function confirmDeleteJourney(id) {
     await placesStore.deleteJourney(id)
     closeJourneyDetail()
     updateMapView()
+    showToast('旅程已删除', 'success')
+  } catch (error) {
+    showToast('旅程删除失败，请重试', 'error')
   } finally {
     isLoading.value = false
   }
@@ -2522,7 +2557,10 @@ onMounted(async () => {
     await themeStore.fetchThemes()
     await themeStore.fetchActiveTheme()
     await placesStore.fetchPlaces()
-    await placesStore.fetchJourneys()
+    await placesStore.fetchJourneys().catch(() => {
+      placesStore.journeys = []
+      showToast('旅程数据暂时加载失败，地图足迹仍可正常浏览', 'error', 4200)
+    })
     await nextTick()
     await initMap()
   } finally {
@@ -2540,6 +2578,15 @@ watch(
   () => themeStore.activeTheme,
   () => updateMapView(),
   { deep: true },
+)
+
+watch(
+  () => editMode.showPasswordModal,
+  (shouldShow) => {
+    if (shouldShow && !editMode.isAuthenticated) {
+      openPasswordModal()
+    }
+  },
 )
 
 watch(filteredCities, () => {
@@ -4260,6 +4307,23 @@ watch(
 
   .timeline-board-header p {
     display: none;
+  }
+
+  .empty-guide-card {
+    max-width: calc(100vw - 32px);
+    padding: 24px;
+    margin-top: 0;
+  }
+
+  .guide-steps {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .guide-step {
+    flex-direction: row;
+    justify-content: flex-start;
+    text-align: left;
   }
 
   .mobile-hidden {
