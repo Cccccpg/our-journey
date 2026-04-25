@@ -1092,6 +1092,8 @@ const currentCityArea = ref(null)
 const provinceGeoCache = ref({})
 const districtGeoCache = ref({})
 const chinaGeoCache = ref(null)
+const chinaCentersCache = ref(null) // 轻量的省份中心点数据
+const chinaBoundaryLoaded = ref(false) // 标记完整边界是否已加载
 const hoverLabel = ref(null)
 const tooltipPosition = ref({ x: 0, y: 0 })
 let mapResizeObserver = null
@@ -2254,6 +2256,9 @@ async function loadProvinceMap(province) {
   transitionText.value = `进入 ${province.name}`
   globeAutoRotate = false
 
+  // 清除省份标注（进入省份视图）
+  clearProvinceLabelMarkers()
+
   try {
     // 加载省级 GeoJSON 用于高亮显示
     if (!provinceGeoCache.value[province.adcode]) {
@@ -2342,6 +2347,11 @@ function backToChina() {
   // 移除省级和区县级边界图层
   removeBoundaryLayers()
   globeAutoRotate = true
+
+  // 重新显示省份标注
+  if (chinaCentersCache.value) {
+    createProvinceLabelsFromCenters(chinaCentersCache.value)
+  }
 
   // 飞回全球视角
   mapInstance.flyTo({
@@ -2924,10 +2934,10 @@ function removeDistrictBoundaryLayer() {
 }
 
 function updateChinaBoundaryLayer(geojson) {
-  if (!mapInstance || !maplibreGlModule) return
+  if (!mapInstance) return
 
   const source = mapInstance.getSource('china-boundary')
-  if (source) {
+  if (source && geojson) {
     // 为每个省份添加 name 属性
     const enhancedGeojson = {
       type: 'FeatureCollection',
@@ -2940,44 +2950,6 @@ function updateChinaBoundaryLayer(geojson) {
       })),
     }
     source.setData(enhancedGeojson)
-
-    // 使用 Marker 显示省份中文名称（绕过 glyphs 问题）
-    clearProvinceLabelMarkers()
-    const skin = activeMapSkinConfig.value
-    const showLabels = !currentProvince.value && !currentCityArea.value
-
-    if (showLabels) {
-      enhancedGeojson.features.forEach(f => {
-        const name = f.properties?.name
-        if (!name) return
-
-        // 计算省份中心点
-        const center = f.properties?.center || getFeatureCenter(f)
-        if (!center) return
-
-        // 创建 HTML 标注元素
-        const el = document.createElement('div')
-        el.className = 'province-label-marker'
-        el.textContent = name
-        el.style.cssText = `
-          color: ${skin.label};
-          font-size: 11px;
-          font-weight: 500;
-          background: ${getLabelHaloColor(activeMapSkin.value)};
-          padding: 2px 6px;
-          border-radius: 3px;
-          white-space: nowrap;
-          pointer-events: none;
-          opacity: 0.85;
-        `
-
-        // 使用 MapLibre Marker
-        const marker = new maplibreGlModule.Marker(el)
-          .setLngLat(center)
-          .addTo(mapInstance)
-        provinceLabelMarkers.push(marker)
-      })
-    }
   }
 }
 
@@ -3011,6 +2983,74 @@ function clearProvinceLabelMarkers() {
   provinceLabelMarkers = []
 }
 
+// 从轻量中心点数据创建省份标注（快速显示）
+function createProvinceLabelsFromCenters(provinces) {
+  if (!mapInstance || !maplibreGlModule) return
+
+  clearProvinceLabelMarkers()
+  const skin = activeMapSkinConfig.value
+
+  provinces.forEach(p => {
+    const name = normalizeRegionName(p.name)
+    if (!name || !p.center) return
+
+    const el = document.createElement('div')
+    el.className = 'province-label-marker'
+    el.textContent = name
+    el.style.cssText = `
+      color: ${skin.label};
+      font-size: 11px;
+      font-weight: 500;
+      background: ${getLabelHaloColor(activeMapSkin.value)};
+      padding: 2px 6px;
+      border-radius: 3px;
+      white-space: nowrap;
+      pointer-events: auto;
+      cursor: pointer;
+      opacity: 0.85;
+    `
+
+    const marker = new maplibreGlModule.Marker(el)
+      .setLngLat(p.center)
+      .addTo(mapInstance)
+
+    // 点击标注进入省份
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      const province = getProvinceByName(name)
+      if (province) {
+        globeAutoRotate = false
+        // 先加载完整边界再进入省份
+        if (!chinaBoundaryLoaded.value) {
+          await loadFullChinaBoundary()
+        }
+        await loadProvinceMap(province)
+      }
+    })
+
+    provinceLabelMarkers.push(marker)
+  })
+}
+
+// 加载完整的中国边界数据（582KB，按需加载）
+async function loadFullChinaBoundary() {
+  if (chinaBoundaryLoaded.value) return
+
+  try {
+    const response = await fetch('/china_full.json')
+    if (response.ok) {
+      const chinaGeoJson = await response.json()
+      chinaGeoCache.value = chinaGeoJson
+      chinaBoundaryLoaded.value = true
+
+      // 更新边界图层
+      updateChinaBoundaryLayer(chinaGeoJson)
+    }
+  } catch (err) {
+    console.warn('加载完整边界数据失败:', err)
+  }
+}
+
 function updateMapView() {
   if (!mapInstance) return
   mapInstance.setStyle(buildMaplibreStyle())
@@ -3024,6 +3064,11 @@ function updateMapView() {
   }
   if (currentCityArea.value && districtGeoCache.value[currentCityArea.value.adcode]) {
     updateDistrictBoundaryLayer(districtGeoCache.value[currentCityArea.value.adcode])
+  }
+
+  // 重新创建省份标注（使用新主题颜色）
+  if (chinaCentersCache.value && !currentProvince.value && !currentCityArea.value) {
+    createProvinceLabelsFromCenters(chinaCentersCache.value)
   }
 
   updateFootprintMarkers()
@@ -3083,19 +3128,26 @@ async function initMap() {
       globeAutoRotate = false
     })
 
-    // 延迟加载全国省份边界数据（优化移动端加载速度）
-    setTimeout(async () => {
-      try {
-        const response = await fetch('/china_full.json')
-        if (response.ok) {
-          const chinaGeoJson = await response.json()
-          chinaGeoCache.value = chinaGeoJson
-          updateChinaBoundaryLayer(chinaGeoJson)
-        }
-      } catch (err) {
-        console.warn('加载全国边界数据失败:', err)
+    // 加载轻量的省份中心点数据（2.8KB，快速显示标注）
+    try {
+      const response = await fetch('/china_centers.json')
+      if (response.ok) {
+        const data = await response.json()
+        chinaCentersCache.value = data.provinces
+        // 立即显示省份标注（无需边界数据）
+        createProvinceLabelsFromCenters(data.provinces)
       }
-    }, 500)
+    } catch (err) {
+      console.warn('加载省份中心数据失败:', err)
+    }
+
+    // 监听缩放事件，放大时加载完整边界
+    mapInstance.on('zoomend', () => {
+      const zoom = mapInstance.getZoom()
+      if (zoom >= 4 && !chinaBoundaryLoaded.value) {
+        loadFullChinaBoundary()
+      }
+    })
   })
 
   // 点击足迹点
@@ -3113,7 +3165,7 @@ async function initMap() {
     }
   })
 
-  // 点击全国省份边界区域（globe视图）
+  // 点击全国省份边界区域（globe视图，需要完整边界数据）
   mapInstance.on('click', 'china-fill', async (e) => {
     if (!currentProvince.value && !currentCityArea.value) {
       // 从全国视图点击进入省份
