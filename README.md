@@ -45,4 +45,4 @@ pm2 start backend/server.js --name travel-backend
 
 ## 编辑模式
 
-访问 `/edit?token=travel2024love` 进入编辑模式，密码为 `20230225`。
+访问 `/edit?token=travel2024love` 进入编辑模式，密码为 `xxxxx`
