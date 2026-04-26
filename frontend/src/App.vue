@@ -284,39 +284,13 @@
           :class="[`skin-${activeMapSkin}`, { transitioning: mapTransitioning, 'timeline-mode': viewMode === 'timeline' }]"
           :style="mapStageStyle"
         >
-          <!-- 位置搜索框 -->
-          <div v-if="viewMode === 'map' && editMode.isAuthenticated" class="location-search-box">
-            <input
-              v-model="locationSearchQuery"
-              type="text"
-              placeholder="搜索位置..."
-              @input="handleLocationSearchInput"
-              @keyup.enter="performLocationSearch"
-            />
-            <button class="search-btn" @click="performLocationSearch" :disabled="!locationSearchQuery">
-              搜索
-            </button>
-            <transition name="fade">
-              <div v-if="showLocationSearchResults && locationSearchResults.length" class="search-results">
-                <button
-                  v-for="result in locationSearchResults"
-                  :key="result.place_id"
-                  class="search-result-item"
-                  @click="selectLocationSearchResult(result)"
-                >
-                  <strong>{{ result.display_name.split(',')[0] }}</strong>
-                  <small>{{ result.display_name.split(',').slice(1, 3).join(', ') }}</small>
-                </button>
-              </div>
-            </transition>
-            <transition name="fade">
-              <div
-                v-if="showLocationSearchResults"
-                class="search-results-backdrop"
-                @click="showLocationSearchResults = false"
-              ></div>
-            </transition>
-          </div>
+          <!-- 地图选点提示（编辑模式下显示） -->
+          <transition name="fade">
+            <div v-if="isPickingLocation && editMode.isAuthenticated" class="location-picker-tip">
+              <span>点击地图选择位置</span>
+              <button class="cancel-btn" @click="cancelPickingLocation">取消</button>
+            </div>
+          </transition>
 
           <div v-if="viewMode === 'map'" class="map-overlay-card" :class="{ collapsed: mapOverlayCollapsed }">
             <button
@@ -561,10 +535,30 @@
             <div class="helper-card">
               <strong>定位状态</strong>
               <p>{{ addLocationSummary }}</p>
+              <button
+                v-if="formData.latitude && formData.longitude"
+                class="mini-btn"
+                @click="formData.latitude = null; formData.longitude = null"
+              >
+                清除坐标
+              </button>
             </div>
           </div>
 
           <div class="form-grid">
+            <label class="field-block full-span">
+              <span>坐标位置</span>
+              <div class="coord-picker">
+                <span v-if="formData.latitude && formData.longitude">
+                  {{ formData.latitude.toFixed(4) }}, {{ formData.longitude.toFixed(4) }}
+                </span>
+                <span v-else class="coord-placeholder">未设置坐标</span>
+                <button class="pick-btn" @click="showAddPanel = false; startPickingLocation()">
+                  {{ formData.latitude ? '重新选点' : '地图选点' }}
+                </button>
+              </div>
+            </label>
+
             <label class="field-block">
               <span>城市</span>
               <input
@@ -647,11 +641,11 @@
                   multiple
                   accept="image/*"
                   capture="environment"
-                  style="position: absolute; opacity: 0; width: 100%; height: 100%; top: 0; left: 0; cursor: pointer;"
+                  style="position: absolute; opacity: 0; width: 100%; height: 100%; top: 0; left: 0; cursor: pointer; z-index: 1;"
                   @change="handleUpload"
                 />
-                <strong>点击或拖拽照片到这里</strong>
-                <p>支持一次补充多张旅行照片</p>
+                <strong style="position: relative; z-index: 2; pointer-events: none;">点击或拖拽照片到这里</strong>
+                <p style="position: relative; z-index: 2; pointer-events: none;">支持一次补充多张旅行照片</p>
               </div>
             </label>
           </div>
@@ -758,11 +752,11 @@
                   multiple
                   accept="image/*"
                   capture="environment"
-                  style="position: absolute; opacity: 0; width: 100%; height: 100%; top: 0; left: 0; cursor: pointer;"
+                  style="position: absolute; opacity: 0; width: 100%; height: 100%; top: 0; left: 0; cursor: pointer; z-index: 1;"
                   @change="handleUpload"
                 />
-                <strong>点击或拖拽照片到这里</strong>
-                <p>新增照片会自动追加到这条足迹</p>
+                <strong style="position: relative; z-index: 2; pointer-events: none;">点击或拖拽照片到这里</strong>
+                <p style="position: relative; z-index: 2; pointer-events: none;">新增照片会自动追加到这条足迹</p>
               </div>
             </label>
           </div>
@@ -807,10 +801,6 @@
               <strong>{{ skin.name }}</strong>
               <small>{{ skin.mood }}</small>
             </button>
-          </div>
-
-          <div class="modal-actions">
-            <button class="primary-btn" @click="showThemePanel = false">完成</button>
           </div>
         </div>
       </div>
@@ -1026,11 +1016,8 @@ const mapRef = ref(null)
 const mapStageBodyRef = ref(null)
 const addUploadInput = ref(null)
 const editUploadInput = ref(null)
-const locationSearchQuery = ref('')
-const locationSearchResults = ref([])
-const showLocationSearchResults = ref(false)
-const locationSearchDebounceTimer = ref(null)
-const searchMarker = ref(null)
+const isPickingLocation = ref(false) // 是否正在选点模式
+const pickMarker = ref(null) // 选点标记
 let mapInstance = null
 let maplibreGlModule = null
 let provinceLabelMarkers = []
@@ -1308,100 +1295,53 @@ const mapStageStyle = computed(() => ({
   '--map-skin-glow': activeMapSkinConfig.value.glow,
 }))
 
-// ========== 位置搜索功能 ==========
+// ========== 地图选点功能 ==========
 
-function handleLocationSearchInput() {
-  // 清除之前的 debounce timer
-  if (locationSearchDebounceTimer.value) {
-    clearTimeout(locationSearchDebounceTimer.value)
-  }
-
-  // 设置新的 debounce
-  locationSearchDebounceTimer.value = setTimeout(() => {
-    if (locationSearchQuery.value.length >= 2) {
-      performLocationSearch()
-    } else {
-      locationSearchResults.value = []
-      showLocationSearchResults.value = false
-    }
-  }, 500)
-}
-
-async function performLocationSearch() {
-  if (!locationSearchQuery.value) return
-
-  try {
-    // 使用 Nominatim API (OpenStreetMap 的搜索服务)
-    const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(locationSearchQuery.value)}&limit=5&accept-language=zh`
-    )
-    const data = await response.json()
-    locationSearchResults.value = data
-    showLocationSearchResults.value = true
-  } catch (error) {
-    console.warn('搜索失败:', error)
-    locationSearchResults.value = []
-  }
-}
-
-async function selectLocationSearchResult(result) {
-  showLocationSearchResults.value = false
-  locationSearchResults.value = []
-
-  const lat = parseFloat(result.lat)
-  const lon = parseFloat(result.lon)
-  const displayName = result.display_name
-
-  // 飞到搜索结果位置
+function startPickingLocation() {
+  isPickingLocation.value = true
   if (mapInstance) {
-    mapInstance.flyTo({
-      center: [lon, lat],
-      zoom: 12,
-      duration: 1500,
-    })
+    mapInstance.getCanvas().style.cursor = 'crosshair'
+  }
+}
 
-    // 移除之前的搜索标记
-    if (searchMarker.value) {
-      searchMarker.value.remove()
-    }
+function cancelPickingLocation() {
+  isPickingLocation.value = false
+  if (mapInstance) {
+    mapInstance.getCanvas().style.cursor = 'grab'
+  }
+  if (pickMarker.value) {
+    pickMarker.value.remove()
+    pickMarker.value = null
+  }
+}
 
-    // 添加临时标记
-    if (maplibreGlModule) {
-      const el = document.createElement('div')
-      el.className = 'search-marker'
-      el.innerHTML = '📍'
-      el.style.cssText = 'font-size: 24px; cursor: pointer;'
-      searchMarker.value = new maplibreGlModule.Marker(el)
-        .setLngLat([lon, lat])
-        .addTo(mapInstance)
-    }
+function handleMapClickForLocation(e) {
+  if (!isPickingLocation.value) return
+
+  const { lng, lat } = e.lngLat
+  isPickingLocation.value = false
+  if (mapInstance) {
+    mapInstance.getCanvas().style.cursor = 'grab'
   }
 
-  // 解析地址信息，填充表单
-  const addressParts = displayName.split(',')
-  const city_name = addressParts[0] || ''
-  const province_name = addressParts[1] || ''
-  const district_name = addressParts[2] || ''
-
-  // 查找匹配的省份
-  const matchedProvince = placesStore.provinces.find(p => {
-    const normalized = normalizeRegionName(p.name)
-    const normalizedSearch = normalizeRegionName(province_name)
-    return normalized.includes(normalizedSearch) || normalizedSearch.includes(normalized)
-  })
-
-  formData.value = {
-    ...formData.value,
-    city_name: city_name.trim(),
-    province_id: matchedProvince?.id || null,
-    province_name: province_name.trim(),
-    district_name: district_name.trim(),
-    latitude: lat,
-    longitude: lon,
-    visited_at: formData.value.visited_at || new Date().toISOString().split('T')[0],
+  // 添加标记点
+  if (maplibreGlModule) {
+    if (pickMarker.value) {
+      pickMarker.value.remove()
+    }
+    const el = document.createElement('div')
+    el.innerHTML = '📍'
+    el.style.cssText = 'font-size: 24px; transform: translate(-50%, -50%);'
+    pickMarker.value = new maplibreGlModule.Marker(el)
+      .setLngLat([lng, lat])
+      .addTo(mapInstance)
   }
 
-  // 打开添加面板
+  // 填充表单坐标
+  formData.value.latitude = lat
+  formData.value.longitude = lng
+
+  // 重新打开添加面板
   showAddPanel.value = true
 }
 
@@ -3053,25 +2993,32 @@ async function loadFullChinaBoundary() {
 
 function updateMapView() {
   if (!mapInstance) return
+
+  // 清除旧的标注（会在 style 更新后重新创建）
+  clearProvinceLabelMarkers()
+
   mapInstance.setStyle(buildMaplibreStyle())
 
-  // 重新设置边界数据
-  if (chinaGeoCache.value) {
-    updateChinaBoundaryLayer(chinaGeoCache.value)
-  }
-  if (currentProvince.value && provinceGeoCache.value[currentProvince.value.adcode]) {
-    updateProvinceBoundaryLayer(provinceGeoCache.value[currentProvince.value.adcode])
-  }
-  if (currentCityArea.value && districtGeoCache.value[currentCityArea.value.adcode]) {
-    updateDistrictBoundaryLayer(districtGeoCache.value[currentCityArea.value.adcode])
-  }
+  // style 更新后重新创建标注
+  mapInstance.once('style.load', () => {
+    // 重新设置边界数据
+    if (chinaGeoCache.value) {
+      updateChinaBoundaryLayer(chinaGeoCache.value)
+    }
+    if (currentProvince.value && provinceGeoCache.value[currentProvince.value.adcode]) {
+      updateProvinceBoundaryLayer(provinceGeoCache.value[currentProvince.value.adcode])
+    }
+    if (currentCityArea.value && districtGeoCache.value[currentCityArea.value.adcode]) {
+      updateDistrictBoundaryLayer(districtGeoCache.value[currentCityArea.value.adcode])
+    }
 
-  // 重新创建省份标注（使用新主题颜色）
-  if (chinaCentersCache.value && !currentProvince.value && !currentCityArea.value) {
-    createProvinceLabelsFromCenters(chinaCentersCache.value)
-  }
+    // 重新创建省份标注（使用新主题颜色）
+    if (chinaCentersCache.value && !currentProvince.value && !currentCityArea.value) {
+      createProvinceLabelsFromCenters(chinaCentersCache.value)
+    }
 
-  updateFootprintMarkers()
+    updateFootprintMarkers()
+  })
 }
 
 function startAutoRotate() {
@@ -3163,6 +3110,11 @@ async function initMap() {
     } else {
       selectFootprint(Number(properties.id))
     }
+  })
+
+  // 地图点击事件（处理选点模式）
+  mapInstance.on('click', (e) => {
+    handleMapClickForLocation(e)
   })
 
   // 点击全国省份边界区域（globe视图，需要完整边界数据）
@@ -4342,95 +4294,42 @@ watch(
   transform: translateZ(0) scale(1.01);
 }
 
-/* 位置搜索框 */
-.location-search-box {
+/* 地图选点提示 */
+.location-picker-tip {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   z-index: 10;
   display: flex;
-  gap: 8px;
-  max-width: 320px;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
 }
 
-.location-search-box input {
-  flex: 1;
-  padding: 10px 14px;
+.location-picker-tip span {
+  font-size: 16px;
+  font-weight: 500;
+  color: #333;
+}
+
+.location-picker-tip .cancel-btn {
+  padding: 8px 20px;
   border: none;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
-  font-size: 14px;
-  outline: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-}
-
-.location-search-box input:focus {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
-}
-
-.location-search-box .search-btn {
-  padding: 10px 16px;
-  border: none;
-  border-radius: 8px;
-  background: var(--primary);
-  color: var(--light);
+  background: #f5f5f5;
+  color: #666;
   font-size: 14px;
   cursor: pointer;
   transition: background 0.2s;
 }
 
-.location-search-box .search-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.search-results {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  margin-top: 4px;
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  max-height: 240px;
-  overflow-y: auto;
-  z-index: 11;
-}
-
-.search-results-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 9;
-  background: transparent;
-}
-
-.search-result-item {
-  display: block;
-  width: 100%;
-  padding: 12px 14px;
-  border: none;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.search-result-item:hover {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-.search-result-item strong {
-  display: block;
-  font-size: 14px;
-  color: #333;
-}
-
-.search-result-item small {
-  display: block;
-  font-size: 12px;
-  color: #666;
-  margin-top: 2px;
+.location-picker-tip .cancel-btn:hover {
+  background: #e5e5e5;
 }
 
 .maplibre-container {
@@ -5012,6 +4911,58 @@ watch(
   gap: 16px;
 }
 
+/* 坐标选点 */
+.coord-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--button-bg) 72%, transparent);
+  border: 1px solid var(--panel-border);
+}
+
+.coord-picker span {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+.coord-placeholder {
+  color: var(--text-muted);
+}
+
+.coord-picker .pick-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--light);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.coord-picker .pick-btn:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+}
+
+.mini-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--panel-border);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: background 0.2s;
+}
+
+.mini-btn:hover {
+  background: color-mix(in srgb, var(--panel-border) 70%, var(--accent));
+}
+
 .field-block {
   display: flex;
   flex-direction: column;
@@ -5056,6 +5007,7 @@ watch(
 }
 
 .upload-box {
+  position: relative;
   border: 1.5px dashed color-mix(in srgb, var(--primary) 42%, transparent);
   border-radius: 20px;
   background: color-mix(in srgb, var(--button-bg) 62%, transparent);
