@@ -6062,14 +6062,35 @@ watch(
 
 /* 手机模式下的 workspace */
 .workspace.mobile-mode {
+  grid-template-columns: 1fr;
+  height: auto;
   min-height: calc(100vh - 140px);
+  min-height: calc(100dvh - 140px);
   padding-bottom: 24px;
 }
 
 .workspace.mobile-mode .sidebar,
 .workspace.mobile-mode .map-stage,
 .workspace.mobile-mode .detail-panel {
-  min-height: calc(100vh - 160px);
+  height: auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.workspace.mobile-mode .sidebar {
+  min-height: 280px;
+}
+
+.workspace.mobile-mode .map-stage {
+  min-height: min(420px, calc(100dvh - 180px));
+}
+
+.workspace.mobile-mode .map-stage-body {
+  min-height: clamp(320px, calc(100dvh - 280px), 480px);
+}
+
+.workspace.mobile-mode .detail-panel {
+  min-height: 200px;
 }
 
 /* 旅程时间线卡片 */
