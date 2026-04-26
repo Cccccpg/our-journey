@@ -11,6 +11,22 @@ if (!fs.existsSync(geoCacheDir)) {
   fs.mkdirSync(geoCacheDir, { recursive: true });
 }
 
+function normalizeRegionName(name = '') {
+  return String(name)
+    .replace(/特别行政区/g, '')
+    .replace(/壮族自治区|回族自治区|维吾尔自治区|自治区/g, '')
+    .replace(/地区|盟|自治州/g, '')
+    .replace(/省|市|区|县/g, '')
+    .trim();
+}
+
+function firstAddressValue(address, keys) {
+  for (const key of keys) {
+    if (address?.[key]) return address[key];
+  }
+  return '';
+}
+
 // 获取所有省份和城市数据（公开）
 router.get('/', (req, res) => {
   const provinces = db.prepare('SELECT id, name, code, adcode, center_lon, center_lat, visited_at, notes FROM provinces').all();
@@ -141,6 +157,76 @@ router.get('/cities/:id', (req, res) => {
   const photos = db.prepare('SELECT * FROM photos WHERE city_id = ? ORDER BY is_cover DESC, display_order ASC, id ASC').all(id);
 
   res.json({ city, photos });
+});
+
+router.get('/reverse-geocode', async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ error: 'invalid coordinates' });
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const url = new URL('https://nominatim.openstreetmap.org/reverse');
+    url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('lat', String(lat));
+    url.searchParams.set('lon', String(lng));
+    url.searchParams.set('zoom', '18');
+    url.searchParams.set('addressdetails', '1');
+    url.searchParams.set('accept-language', 'zh-CN,zh,en');
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'our-journey/1.0 reverse-geocode',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
+      }
+    });
+
+    if (!response.ok) {
+      return res.status(502).json({ error: 'reverse geocode failed' });
+    }
+
+    const data = await response.json();
+    const address = data.address || {};
+    const countryCode = String(address.country_code || '').toUpperCase();
+    const provinceRaw = firstAddressValue(address, ['state', 'province', 'region']);
+    const cityRaw = firstAddressValue(address, ['city', 'town', 'municipality', 'village', 'county']);
+    const districtRaw = firstAddressValue(address, ['city_district', 'district', 'county', 'borough', 'suburb', 'neighbourhood', 'quarter']);
+    const detailRaw = firstAddressValue(address, ['road', 'pedestrian', 'footway', 'residential', 'amenity', 'tourism', 'building']);
+    const placeName = detailRaw || districtRaw || cityRaw || data.name || data.display_name || '地图选点';
+
+    const provinces = db.prepare('SELECT id, name, adcode FROM provinces').all();
+    const matchedProvince = provinces.find((province) => {
+      const source = normalizeRegionName(provinceRaw);
+      const target = normalizeRegionName(province.name);
+      return source && (source === target || source.includes(target) || target.includes(source));
+    });
+
+    res.json({
+      country: address.country || '',
+      country_code: countryCode,
+      province: matchedProvince?.name || provinceRaw || address.country || '',
+      province_id: matchedProvince?.id || null,
+      province_adcode: matchedProvince?.adcode || '',
+      city: normalizeRegionName(cityRaw || placeName),
+      city_adcode: '',
+      district: normalizeRegionName(districtRaw || detailRaw),
+      district_adcode: '',
+      name: normalizeRegionName(placeName),
+      address: data.display_name || '',
+      latitude: lat,
+      longitude: lng
+    });
+  } catch (error) {
+    res.status(502).json({ error: 'reverse geocode failed' });
+  } finally {
+    clearTimeout(timeout);
+  }
 });
 
 router.get('/geo/cities/:adcode/districts', async (req, res) => {

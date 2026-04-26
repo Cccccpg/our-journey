@@ -560,7 +560,7 @@
             </label>
 
             <label class="field-block">
-              <span>城市</span>
+              <span>城市 / 地点</span>
               <input
                 v-if="formData.city_name"
                 v-model="formData.city_name"
@@ -568,7 +568,7 @@
                 readonly
               />
               <select v-else v-model="formData.city_name" class="field-control">
-                <option value="">选择城市</option>
+                <option value="">选择城市或在地图选点</option>
                 <option v-for="city in availableCities" :key="city.value" :value="city.value">{{ city.label }}</option>
               </select>
             </label>
@@ -1005,7 +1005,8 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { deletePhoto, setCoverPhoto, updatePhotoOrder, uploadPhotos } from './api'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { deletePhoto, reverseGeocode, setCoverPhoto, updatePhotoOrder, uploadPhotos } from './api'
 import { useEditStore } from './stores/edit'
 import { usePlacesStore } from './stores/places'
 
@@ -1018,9 +1019,14 @@ const addUploadInput = ref(null)
 const editUploadInput = ref(null)
 const isPickingLocation = ref(false) // 是否正在选点模式
 const pickMarker = ref(null) // 选点标记
+const isResolvingPickedLocation = ref(false)
+const DEFAULT_GLOBE_CENTER = [104, 24]
+const DEFAULT_GLOBE_ZOOM = 1.2
+const MOBILE_GLOBE_ZOOM = 0.82
 let mapInstance = null
 let maplibreGlModule = null
 let provinceLabelMarkers = []
+let suppressLocationSync = false
 
 const showThemePanel = ref(false)
 const showPasswordModal = ref(false)
@@ -1306,6 +1312,7 @@ function startPickingLocation() {
 
 function cancelPickingLocation() {
   isPickingLocation.value = false
+  isResolvingPickedLocation.value = false
   if (mapInstance) {
     mapInstance.getCanvas().style.cursor = 'grab'
   }
@@ -1315,11 +1322,62 @@ function cancelPickingLocation() {
   }
 }
 
-function handleMapClickForLocation(e) {
+function buildPickedLocationMarker() {
+  const skin = activeMapSkinConfig.value
+  const el = document.createElement('div')
+  el.className = 'picked-location-marker'
+  el.style.setProperty('--picked-color', skin.point)
+  el.style.setProperty('--picked-halo', skin.pointHalo || skin.glow)
+  el.style.setProperty('--picked-border', skin.label)
+  return el
+}
+
+function getFallbackLocationFromMap(point) {
+  if (!mapInstance || !point) return {}
+  const layers = ['district-fill', 'province-fill', 'china-fill'].filter((layer) => mapInstance.getLayer(layer))
+  const features = layers.length ? mapInstance.queryRenderedFeatures(point, { layers }) : []
+  const districtFeature = features.find((feature) => feature.layer?.id === 'district-fill')
+  const provinceFeature = features.find((feature) => feature.layer?.id === 'province-fill' || feature.layer?.id === 'china-fill')
+
+  return {
+    province: currentProvince.value?.name || provinceFeature?.properties?.name || '',
+    city: currentCityArea.value?.name || '',
+    district: districtFeature?.properties?.name || '',
+    provinceAdcode: currentProvince.value?.adcode || provinceFeature?.properties?.adcode || '',
+    cityAdcode: currentCityArea.value?.adcode || '',
+    districtAdcode: districtFeature?.properties?.adcode || '',
+  }
+}
+
+function applyPickedLocation(lng, lat, location = {}) {
+  const fallback = location.fallback || {}
+  const provinceName = location.province || fallback.province || currentProvince.value?.name || ''
+  const cityName = location.city || fallback.city || location.county || location.town || location.village || location.name || '地图选点'
+  const districtName = location.district || location.suburb || location.neighbourhood || location.road || fallback.district || ''
+  const province = location.province_id
+    ? placesStore.provinces.find((item) => item.id === location.province_id)
+    : getProvinceByName(provinceName)
+
+  suppressLocationSync = true
+  formData.value.latitude = lat
+  formData.value.longitude = lng
+  formData.value.province_id = province?.id || currentProvince.value?.id || null
+  formData.value.province_name = province?.name || provinceName || currentProvince.value?.name || location.country || ''
+  formData.value.city_name = normalizeRegionName(cityName) || cityName
+  formData.value.city_adcode = location.city_adcode || fallback.cityAdcode || currentCityArea.value?.adcode || ''
+  formData.value.district_name = normalizeRegionName(districtName) || districtName
+  formData.value.district_adcode = location.district_adcode || fallback.districtAdcode || ''
+  nextTick(() => {
+    suppressLocationSync = false
+  })
+}
+
+async function handleMapClickForLocation(e) {
   if (!isPickingLocation.value) return
 
   const { lng, lat } = e.lngLat
   isPickingLocation.value = false
+  isResolvingPickedLocation.value = true
   if (mapInstance) {
     mapInstance.getCanvas().style.cursor = 'grab'
   }
@@ -1329,20 +1387,24 @@ function handleMapClickForLocation(e) {
     if (pickMarker.value) {
       pickMarker.value.remove()
     }
-    const el = document.createElement('div')
-    el.innerHTML = '📍'
-    el.style.cssText = 'font-size: 24px; transform: translate(-50%, -50%);'
-    pickMarker.value = new maplibreGlModule.Marker(el)
+    pickMarker.value = new maplibreGlModule.Marker(buildPickedLocationMarker())
       .setLngLat([lng, lat])
       .addTo(mapInstance)
   }
 
-  // 填充表单坐标
-  formData.value.latitude = lat
-  formData.value.longitude = lng
-
-  // 重新打开添加面板
+  const fallback = getFallbackLocationFromMap(e.point)
+  applyPickedLocation(lng, lat, { fallback })
   showAddPanel.value = true
+
+  try {
+    const { data } = await reverseGeocode(lat, lng)
+    applyPickedLocation(lng, lat, { ...data, fallback })
+  } catch (error) {
+    showToast('已记录坐标，地址识别暂时失败，可手动补充城市', 'error', 3600)
+  } finally {
+    isResolvingPickedLocation.value = false
+  }
+
 }
 
 function dismissEmptyGuide() {
@@ -1404,7 +1466,11 @@ function formatDate(date) {
 
 function cityLabel(city) {
   if (!city) return ''
-  return city.district_name ? `${city.name} · ${city.district_name}` : city.name
+  const mainName = city.name || city.city_name || '未命名地点'
+  const detailName = city.district_name && normalizeRegionName(city.district_name) !== normalizeRegionName(mainName)
+    ? city.district_name
+    : ''
+  return detailName ? `${mainName} · ${detailName}` : mainName
 }
 
 function detailLocationText(city) {
@@ -1793,10 +1859,17 @@ const tooltipStyle = computed(() => ({
 }))
 
 const addLocationSummary = computed(() => {
+  if (isResolvingPickedLocation.value) return '正在根据地图选点识别地址...'
+  const pickedParts = [
+    formData.value.province_name,
+    formData.value.city_name,
+    formData.value.district_name,
+  ].filter(Boolean)
+  if (pickedParts.length) return pickedParts.join(' · ')
   if (currentCityArea.value) {
     return `${currentCityArea.value.name} · ${formData.value.district_name || '请选择或点击区县'}`
   }
-  if (!currentProvince.value) return '先进入某个省份，再选择城市。'
+  if (!currentProvince.value) return '可以直接在地球上选点，系统会自动识别城市和地点。'
   if (formData.value.city_name) return `${formData.value.province_name || currentProvince.value.name} · ${formData.value.city_name}`
   return `${currentProvince.value.name} · 还没有定位到具体城市`
 })
@@ -1808,7 +1881,7 @@ const formHeaderText = computed(() => {
   if (currentProvince.value) {
     return `${currentProvince.value.name} · ${formData.value.city_name || '选择城市后开始记录'}`
   }
-  return '进入省份后开始记录'
+  return formData.value.city_name ? addLocationSummary.value : '在地球上选点后开始记录'
 })
 
 const editLocationSummary = computed(() => {
@@ -2119,19 +2192,19 @@ function focusMapOnFootprint(city) {
 function resetGlobeView() {
   globeAutoRotate = true
   if (!mapInstance) return
-  mapInstance.flyTo({ center: [104, 36], zoom: 2, duration: 1500 })
+  mapInstance.flyTo({ center: DEFAULT_GLOBE_CENTER, zoom: getDefaultMapZoom(), duration: 1500 })
 }
 
 function getDefaultMapZoom() {
   if (currentCityArea.value) return 12
   if (currentProvince.value) return 7
-  return 3
+  return isMobile.value ? MOBILE_GLOBE_ZOOM : DEFAULT_GLOBE_ZOOM
 }
 
 function getMinMapZoom() {
   if (currentCityArea.value) return 10
   if (currentProvince.value) return 5
-  return 1
+  return 0.7
 }
 
 function getCurrentMapZoom() {
@@ -2165,9 +2238,20 @@ function handleMapWheel(event) {
   if (viewMode.value !== 'map' || !mapInstance) return
   event.preventDefault()
   event.stopPropagation()
+  const canvas = mapInstance.getCanvas()
+  const rect = canvas.getBoundingClientRect()
+  const point = [
+    Math.min(Math.max(event.clientX - rect.left, 0), rect.width),
+    Math.min(Math.max(event.clientY - rect.top, 0), rect.height),
+  ]
+  const around = mapInstance.unproject(point)
   const currentZoom = mapInstance.getZoom()
-  const ratio = event.deltaY < 0 ? 1.15 : 1 / 1.15
-  mapInstance.setZoom(clampMapZoom(currentZoom * ratio))
+  const delta = event.deltaY < 0 ? 0.45 : -0.45
+  mapInstance.zoomTo(clampMapZoom(currentZoom + delta), {
+    around,
+    duration: 170,
+    easing: (t) => 1 - Math.pow(1 - t, 3),
+  })
   globeAutoRotate = false
 }
 
@@ -2185,7 +2269,7 @@ function resetView() {
     return
   }
 
-  mapInstance.flyTo({ center: [104, 36], zoom: 3, duration: 800 })
+  mapInstance.flyTo({ center: DEFAULT_GLOBE_CENTER, zoom: getDefaultMapZoom(), duration: 800 })
 }
 
 async function loadProvinceMap(province) {
@@ -2295,8 +2379,8 @@ function backToChina() {
 
   // 飞回全球视角
   mapInstance.flyTo({
-    center: [104, 36],
-    zoom: 3,
+    center: DEFAULT_GLOBE_CENTER,
+    zoom: getDefaultMapZoom(),
     duration: 1500,
   })
 
@@ -2437,19 +2521,12 @@ function requestMapResize(delay = 60) {
 // ========== MapLibre GL 地图函数 ==========
 
 function getTileSource(skinId) {
-  // 根据主题选择不同的瓦片源（简化配置优化加载速度）
-  const baseUrl = 'https://basemaps.cartocdn.com/rastertiles'
-  switch (skinId) {
-    case 'night':
-      return { type: 'raster', tiles: [`${baseUrl}/dark_all/{z}/{x}/{y}.png`], tileSize: 256 }
-    case 'warm':
-      return { type: 'raster', tiles: [`${baseUrl}/voyager/{z}/{x}/{y}.png`], tileSize: 256 }
-    case 'vintage':
-      return { type: 'raster', tiles: [`${baseUrl}/light_nolabels/{z}/{x}/{y}.png`], tileSize: 256 }
-    case 'aero':
-      return { type: 'raster', tiles: [`${baseUrl}/light_all/{z}/{x}/{y}.png`], tileSize: 256 }
-    default:
-      return { type: 'raster', tiles: [`${baseUrl}/light_all/{z}/{x}/{y}.png`], tileSize: 256 }
+  // OSM 标准底图使用当地语言标注，中国区域会优先显示中文名称。
+  return {
+    type: 'raster',
+    tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+    tileSize: 256,
+    attribution: '© OpenStreetMap contributors',
   }
 }
 
@@ -2459,36 +2536,40 @@ function getOSMLayerPaint(skinId) {
     case 'night':
       // 星图主题：深邃夜空效果
       return {
-        'raster-saturation': -0.2,
-        'raster-brightness-min': 0.12,
-        'raster-brightness-max': 0.55,
-        'raster-opacity': 0.7,
+        'raster-saturation': -0.72,
+        'raster-contrast': 0.42,
+        'raster-brightness-min': 0.04,
+        'raster-brightness-max': 0.48,
+        'raster-opacity': 0.76,
       }
     case 'warm':
       // 暖砂主题：傍晚暖色调
       return {
-        'raster-saturation': 0.15,
-        'raster-brightness-min': 0.12,
-        'raster-brightness-max': 0.92,
-        'raster-opacity': 0.8,
-        'raster-hue-rotate': 25, // 橙暖色调偏移
+        'raster-saturation': 0.08,
+        'raster-contrast': 0.16,
+        'raster-brightness-min': 0.08,
+        'raster-brightness-max': 0.9,
+        'raster-opacity': 0.96,
+        'raster-hue-rotate': 12,
       }
     case 'vintage':
       // 复古主题：旧纸质地图效果（叠加棕色滤镜）
       return {
-        'raster-saturation': -0.4,
-        'raster-brightness-min': 0.22,
-        'raster-brightness-max': 0.8,
-        'raster-opacity': 0.75,
-        'raster-hue-rotate': 35, // 棕褐色调
+        'raster-saturation': -0.58,
+        'raster-contrast': 0.18,
+        'raster-brightness-min': 0.16,
+        'raster-brightness-max': 0.82,
+        'raster-opacity': 0.9,
+        'raster-hue-rotate': 32,
       }
     case 'aero':
       // 航线主题：清晰明亮
       return {
-        'raster-saturation': -0.08,
+        'raster-saturation': -0.12,
+        'raster-contrast': 0.12,
         'raster-brightness-min': 0.08,
-        'raster-brightness-max': 0.95,
-        'raster-opacity': 0.82,
+        'raster-brightness-max': 0.9,
+        'raster-opacity': 0.96,
       }
     default:
       return {
@@ -2703,15 +2784,27 @@ function buildMaplibreStyle() {
       },
       // 足迹标记点
       {
+        id: 'footprint-halos',
+        type: 'circle',
+        source: 'footprints',
+        filter: ['==', ['get', 'type'], 'point'],
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 10, 7, 20, 13, 34],
+          'circle-color': skin.pointHalo || skin.glow,
+          'circle-blur': activeMapSkin.value === 'night' ? 0.42 : 0.35,
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.48, 8, 0.26, 14, 0.18],
+        },
+      },
+      {
         id: 'footprint-points',
         type: 'circle',
         source: 'footprints',
         filter: ['==', ['get', 'type'], 'point'],
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 8, 10, 16],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 5.5, 7, 10, 13, 16],
           'circle-color': skin.point,
-          'circle-stroke-color': activeMapSkin.value === 'night' ? 'rgba(255,235,195,0.86)' : 'rgba(255,255,255,0.84)',
-          'circle-stroke-width': 2,
+          'circle-stroke-color': activeMapSkin.value === 'night' ? skin.label : 'rgba(255,255,255,0.9)',
+          'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 2, 1.4, 9, 2.4],
           'circle-opacity': 0.95,
         },
       },
@@ -2736,7 +2829,6 @@ function buildMaplibreStyle() {
         },
       },
     ],
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
   }
 }
 
@@ -2787,7 +2879,7 @@ function buildFootprintGeoJSON() {
 function buildJourneyGeoJSON() {
   const features = []
 
-  (placesStore.journeys || []).forEach((journey) => {
+  ;(placesStore.journeys || []).forEach((journey) => {
     if (!journey.from_lon || !journey.from_lat || !journey.to_lon || !journey.to_lat) return
 
     // 创建大圆弧线（近似）
@@ -3025,8 +3117,9 @@ function startAutoRotate() {
   if (!mapInstance || globeRotateTimer) return
   globeRotateTimer = window.setInterval(() => {
     if (!globeAutoRotate || !mapInstance) return
-    const bearing = mapInstance.getBearing()
-    mapInstance.setBearing(bearing + 0.2)
+    if (mapInstance.getZoom() > 4.2) return
+    const center = mapInstance.getCenter()
+    mapInstance.setCenter([center.lng + 0.08, center.lat])
   }, 50)
 }
 
@@ -3046,10 +3139,10 @@ async function initMap() {
   mapInstance = new maplibreGl.Map({
     container: mapRef.value,
     style: buildMaplibreStyle(),
-    center: [104, 36],
-    zoom: 3,
+    center: DEFAULT_GLOBE_CENTER,
+    zoom: getDefaultMapZoom(),
     maxZoom: 18,
-    minZoom: 1,
+    minZoom: 0.7,
     projection: 'globe',
     attributionControl: false,
     pixelRatio: Math.min(window.devicePixelRatio, 1.5), // 限制像素比，减少渲染开销
@@ -3447,6 +3540,7 @@ watch(
 watch(
   () => formData.value.city_name,
   (cityName) => {
+    if (suppressLocationSync) return
     if (!cityName || currentCityArea.value) return
     const city = availableCities.value.find((item) => item.value === cityName)
     if (!city) return
@@ -3459,6 +3553,7 @@ watch(
 watch(
   () => formData.value.district_name,
   (districtName) => {
+    if (suppressLocationSync) return
     if (!districtName || !currentCityArea.value) return
     const district = availableDistricts.value.find((item) => item.value === districtName)
     if (!district) return
@@ -4260,6 +4355,7 @@ watch(
 
 .map-stage-body::after {
   z-index: 1;
+  opacity: 0.68;
   box-shadow: inset 0 0 110px rgba(31, 21, 13, 0.24);
   background:
     radial-gradient(ellipse at 38% 30%, rgba(255, 255, 255, 0.34), transparent 24%),
@@ -4348,6 +4444,29 @@ watch(
   opacity: 0.12;
   filter: blur(2px) saturate(0.78);
   pointer-events: none;
+}
+
+.picked-location-marker {
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--picked-border, #fff);
+  border-radius: 999px;
+  background: var(--picked-color, #c94f35);
+  box-shadow:
+    0 0 0 8px color-mix(in srgb, var(--picked-halo, rgba(201, 79, 53, 0.38)) 46%, transparent),
+    0 12px 24px rgba(0, 0, 0, 0.24);
+}
+
+.picked-location-marker::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 2px;
+  height: 14px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: var(--picked-color, #c94f35);
 }
 
 /* MapLibre GL 样式覆盖 */
@@ -4669,21 +4788,21 @@ watch(
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 6px rgba(255, 107, 107, 0.12);
+  background: var(--map-skin-label);
+  box-shadow: 0 0 0 6px var(--map-skin-glow);
 }
 
 .legend-dot.strong {
   width: 14px;
   height: 14px;
-  background: #2b1d12;
-  box-shadow: 0 0 0 6px rgba(43, 29, 18, 0.1);
+  background: var(--accent);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .legend-line {
   width: 28px;
   height: 2px;
-  background: linear-gradient(90deg, var(--primary), transparent);
+  background: linear-gradient(90deg, var(--primary), var(--map-skin-glow), transparent);
 }
 
 .hero-photo {
@@ -5379,23 +5498,84 @@ watch(
 
   .map-overlay-card {
     position: absolute;
-    left: 12px;
-    right: 12px;
-    top: 12px;
+    left: 8px;
+    top: 8px;
+    right: auto;
     margin: 0;
-    max-width: none;
-    padding: 14px;
+    max-width: min(218px, calc(100% - 16px));
+    padding: 8px 10px;
+    border-radius: 16px;
+  }
+
+  .map-overlay-card:not(.collapsed) {
+    max-height: 126px;
+    overflow: auto;
+  }
+
+  .map-overlay-card.collapsed h3 {
+    display: none;
+  }
+
+  .map-overlay-head {
+    margin-bottom: 0;
+  }
+
+  .map-overlay-card h3 {
+    margin-top: 6px;
+    font-size: 0.95rem;
+  }
+
+  .map-overlay-card p {
+    display: none;
+  }
+
+  .floating-badge {
+    padding: 4px 8px;
+    font-size: 0.72rem;
+  }
+
+  .overlay-toggle {
+    padding: 4px 8px;
+    font-size: 0.7rem;
   }
 
   .context-pills {
-    margin-top: 10px;
+    display: none;
   }
 
   .legend-card {
-    right: 12px;
-    bottom: 76px;
+    right: 10px;
+    bottom: 88px;
     min-width: 0;
-    padding: 12px;
+    max-width: 128px;
+    padding: 8px 9px;
+    border-radius: 14px;
+    font-size: 0.72rem;
+  }
+
+  .legend-title {
+    font-size: 0.74rem;
+  }
+
+  .legend-row {
+    gap: 7px;
+    margin-top: 5px;
+  }
+
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    box-shadow: 0 0 0 4px var(--map-skin-glow);
+  }
+
+  .legend-dot.strong {
+    width: 10px;
+    height: 10px;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  .legend-line {
+    width: 20px;
   }
 
   .timeline-board {

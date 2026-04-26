@@ -20,6 +20,11 @@ export const getPlaces = () => api.get('/places')
 // 获取城市详情
 export const getCityDetail = (id) => api.get(`/places/cities/${id}`)
 
+// 根据经纬度反向识别地址
+export const reverseGeocode = (lat, lng) => api.get('/places/reverse-geocode', {
+  params: { lat, lng }
+})
+
 // 新增城市
 export const addCity = (data) => api.post('/places/cities', data)
 
