@@ -24,7 +24,7 @@
         <span class="nav-icon">📋</span>
         <span class="nav-label">列表</span>
       </button>
-      <button class="nav-item" :class="{ active: mobileView === 'detail' }" @click="mobileView = 'detail'" :disabled="!selectedFootprint && !selectedCluster">
+      <button class="nav-item" :class="{ active: mobileView === 'detail' }" @click="mobileView = 'detail'">
         <span class="nav-icon">📄</span>
         <span class="nav-label">详情</span>
       </button>
@@ -129,7 +129,7 @@
       </div>
 
       <aside class="sidebar panel panel-strong" :class="{ 'mobile-hidden': isMobile && mobileView !== 'list' && mobileView !== 'stats' }" v-if="placesStore.cities.length > 0">
-        <section class="narrative-card">
+        <section v-if="!isMobile || mobileView === 'stats'" class="narrative-card">
           <span class="eyebrow">Shared Miles</span>
           <h2>把一起走过的路，收进同一张地图</h2>
           <p>
@@ -138,7 +138,7 @@
           </p>
         </section>
 
-        <section class="stat-grid">
+        <section v-if="!isMobile || mobileView === 'stats'" class="stat-grid">
           <article class="stat-card">
             <span class="stat-label">正在翻看的记忆</span>
             <strong>{{ filteredCities.length }}</strong>
@@ -161,7 +161,7 @@
           </article>
         </section>
 
-        <section class="region-card">
+        <section v-if="!isMobile || mobileView === 'stats'" class="region-card">
           <div class="section-heading">
             <span class="eyebrow">Region Pulse</span>
             <h3>{{ regionStatsTitle }}</h3>
@@ -183,7 +183,7 @@
           <p>{{ regionStats.range }}</p>
         </section>
 
-        <section class="filter-card">
+        <section v-if="!isMobile || mobileView === 'stats'" class="filter-card">
           <div class="section-heading">
             <span class="eyebrow">Smart Filter</span>
             <h3>按内容状态筛选</h3>
@@ -200,6 +200,27 @@
               <option v-for="year in yearOptions" :key="year" :value="year">{{ year }}</option>
             </select>
           </div>
+          <div class="ai-search-box">
+            <input
+              v-model="aiSearchQuery"
+              class="search-input"
+              type="search"
+              placeholder="AI 搜索：比如下雨天、夜景、第一次旅行"
+              @keyup.enter="runAiSearch"
+            />
+            <button class="ghost-btn ai-action-btn" :disabled="!editMode.isAuthenticated || aiBusy.search" @click="runAiSearch">
+              {{ aiBusy.search ? '查找中' : 'AI 搜索' }}
+            </button>
+          </div>
+          <p v-if="aiSearchReason" class="ai-inline-note">{{ aiSearchReason }}</p>
+          <button
+            v-if="aiMatchedIds.length"
+            class="ghost-btn full-width ai-clear-btn"
+            type="button"
+            @click="aiMatchedIds = []; aiSearchReason = ''; aiSearchQuery = ''"
+          >
+            清除 AI 搜索结果
+          </button>
           <div class="chip-group">
             <button
               v-for="filter in filterOptions"
@@ -214,7 +235,35 @@
           </div>
         </section>
 
-        <section class="timeline-card">
+        <section v-if="isMobile && mobileView === 'list'" class="memory-list-card mobile-list-card">
+          <div class="section-heading">
+            <span class="eyebrow">Collection</span>
+            <h3>{{ currentCityArea ? '当前城市的足迹' : currentProvince ? '本省足迹列表' : '全部足迹列表' }}</h3>
+          </div>
+
+          <div class="collection-tip">
+            {{ collectionTip }}
+          </div>
+
+          <div v-if="filteredCities.length" class="memory-list">
+            <button
+              v-for="city in filteredCities"
+              :key="city.id"
+              class="memory-item"
+              :class="{ active: selectedFootprint?.id === city.id }"
+              @click="selectFootprint(city.id)"
+            >
+              <small>{{ detailLocationText(city) }} · {{ formatDate(city.visited_at) }}</small>
+              <strong>{{ cityLabel(city) }}</strong>
+              <p>{{ citySummary(city) }}</p>
+            </button>
+          </div>
+          <div v-else class="empty-block">
+            当前视图下还没有足迹。
+          </div>
+        </section>
+
+        <section v-if="!isMobile || mobileView === 'list'" class="timeline-card">
           <div class="section-heading">
             <span class="eyebrow">Timeline</span>
             <h3>最近记录</h3>
@@ -239,7 +288,7 @@
         </section>
 
         <!-- 旅程时间线 -->
-        <section class="journey-timeline-card">
+        <section v-if="!isMobile || mobileView === 'list'" class="journey-timeline-card">
           <div class="section-heading">
             <span class="eyebrow">Journeys</span>
             <h3>旅途路线</h3>
@@ -535,7 +584,21 @@
           </div>
         </template>
 
-        <section class="memory-list-card">
+        <section v-if="!isMobile" class="memory-list-card">
+          <div class="ai-memory-card">
+            <div>
+              <span class="eyebrow">AI Story Mode</span>
+              <h3>{{ aiMapSummary?.headline || '让 AI 读懂当前地图' }}</h3>
+              <p>{{ aiMapSummary?.summary || '根据当前省份、城市、筛选结果和足迹内容，生成一张旅行记忆总结卡。' }}</p>
+            </div>
+            <ul v-if="aiMapSummary?.highlights?.length" class="ai-highlight-list">
+              <li v-for="item in aiMapSummary.highlights" :key="item">{{ item }}</li>
+            </ul>
+            <button class="ghost-btn full-width" :disabled="!editMode.isAuthenticated || aiBusy.summary" @click="runAiMapSummary">
+              {{ aiBusy.summary ? '生成中' : 'AI 总结当前视角' }}
+            </button>
+          </div>
+
           <div class="section-heading">
             <span class="eyebrow">Collection</span>
             <h3>{{ currentCityArea ? '当前城市的足迹' : currentProvince ? '本省足迹列表' : '全部足迹列表' }}</h3>
@@ -638,7 +701,12 @@
             </label>
 
             <label class="field-block full-span">
-              <span>记忆描述</span>
+              <span class="field-title-row">
+                记忆描述
+                <button class="mini-btn" type="button" :disabled="aiBusy.draft || !editMode.isAuthenticated" @click="runAiFootprintDraft">
+                  {{ aiBusy.draft ? '生成中' : 'AI 润色' }}
+                </button>
+              </span>
               <textarea
                 v-model="formData.description"
                 class="field-control textarea"
@@ -648,7 +716,12 @@
             </label>
 
             <label class="field-block full-span">
-              <span>标签</span>
+              <span class="field-title-row">
+                标签
+                <button class="mini-btn" type="button" :disabled="aiBusy.draft || !editMode.isAuthenticated" @click="runAiFootprintDraft">
+                  AI 标签
+                </button>
+              </span>
               <input
                 v-model="formData.tags"
                 class="field-control"
@@ -964,7 +1037,12 @@
             </label>
 
             <label class="field-block full-span">
-              <span>旅途备注</span>
+              <span class="field-title-row">
+                旅途备注
+                <button class="mini-btn" type="button" :disabled="aiBusy.journey || !editMode.isAuthenticated || !canSubmitJourney" @click="runAiJourneyTitle">
+                  {{ aiBusy.journey ? '生成中' : 'AI 命名路线' }}
+                </button>
+              </span>
               <textarea v-model="journeyFormData.notes" class="field-control textarea" rows="3" placeholder="旅途中的见闻感受"></textarea>
             </label>
           </div>
@@ -1050,7 +1128,17 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { deletePhoto, reverseGeocode, setCoverPhoto, updatePhotoOrder, uploadPhotos } from './api'
+import {
+  deletePhoto,
+  generateFootprintDraft,
+  generateJourneyTitle,
+  generateMapSummary,
+  reverseGeocode,
+  searchFootprintsWithAi,
+  setCoverPhoto,
+  updatePhotoOrder,
+  uploadPhotos,
+} from './api'
 import { useEditStore } from './stores/edit'
 import { usePlacesStore } from './stores/places'
 
@@ -1161,6 +1249,16 @@ const editingFootprint = ref(null)
 const activeFilter = ref('all')
 const activeYear = ref('all')
 const searchQuery = ref('')
+const aiSearchQuery = ref('')
+const aiSearchReason = ref('')
+const aiMatchedIds = ref([])
+const aiMapSummary = ref(null)
+const aiBusy = ref({
+  draft: false,
+  summary: false,
+  search: false,
+  journey: false,
+})
 const selectedCluster = ref(null)
 const mapTransitioning = ref(false)
 const transitionText = ref('正在切换地图层级...')
@@ -1639,6 +1737,133 @@ function appendTag(mode, tag) {
   target.tags = tags.join(', ')
 }
 
+function buildAiRecords(records = filteredCities.value) {
+  return records.slice(0, 36).map((city) => ({
+    id: city.id,
+    province_name: city.province_name || currentProvince.value?.name || '',
+    name: city.name,
+    district_name: city.district_name || '',
+    visited_at: city.visited_at || '',
+    description: city.description || '',
+    tags: city.tags || '',
+    photo_count: city.photo_count || 0,
+  }))
+}
+
+function ensureAiAccess() {
+  if (editMode.isAuthenticated) return true
+  showSystemNotice('请先解锁编辑模式，再使用 AI 生成能力。', 'error')
+  openPasswordModal()
+  return false
+}
+
+async function runAiFootprintDraft() {
+  if (!ensureAiAccess() || aiBusy.value.draft) return
+  aiBusy.value.draft = true
+  try {
+    const { data } = await generateFootprintDraft({
+      province: currentProvince.value?.name || '',
+      city: formData.value.city_name || currentCityArea.value?.name || '',
+      district: formData.value.district_name || '',
+      address: addLocationSummary.value,
+      date: formData.value.visited_at,
+      description: formData.value.description,
+      tags: formData.value.tags,
+      keywords: [formData.value.city_name, formData.value.district_name, formData.value.tags].filter(Boolean).join(', '),
+    })
+
+    const title = data.title ? `《${data.title}》` : ''
+    formData.value.description = [title, data.description].filter(Boolean).join('\n')
+    if (Array.isArray(data.tags) && data.tags.length) {
+      formData.value.tags = data.tags.join(', ')
+    }
+    showToast('AI 已生成足迹文案')
+  } catch (error) {
+    showSystemNotice(error.response?.data?.error || 'AI 生成失败，请稍后再试。', 'error')
+  } finally {
+    aiBusy.value.draft = false
+  }
+}
+
+async function runAiMapSummary() {
+  if (!ensureAiAccess() || aiBusy.value.summary) return
+  aiBusy.value.summary = true
+  try {
+    const { data } = await generateMapSummary({
+      scope: currentAiScope.value,
+      records: buildAiRecords(),
+    })
+    aiMapSummary.value = data
+    showToast('AI 已总结当前视角')
+  } catch (error) {
+    showSystemNotice(error.response?.data?.error || 'AI 总结失败，请稍后再试。', 'error')
+  } finally {
+    aiBusy.value.summary = false
+  }
+}
+
+async function runAiSearch() {
+  if (!ensureAiAccess() || aiBusy.value.search) return
+  const query = aiSearchQuery.value.trim()
+  if (!query) {
+    showSystemNotice('先输入想找的旅行记忆，比如“下雨天去过的地方”。', 'error')
+    return
+  }
+
+  aiBusy.value.search = true
+  try {
+    const { data } = await searchFootprintsWithAi({
+      query,
+      records: buildAiRecords(scopedCities.value),
+    })
+    const ids = Array.isArray(data.matched_ids) ? data.matched_ids : []
+    aiMatchedIds.value = ids
+    aiSearchReason.value = data.reason || (ids.length ? `AI 找到 ${ids.length} 条相关足迹` : 'AI 暂时没有找到相关足迹')
+    if (ids.length) {
+      searchQuery.value = ''
+      activeFilter.value = 'all'
+      activeYear.value = 'all'
+      const matched = placesStore.cities.filter((city) => ids.includes(city.id))
+      if (matched[0]) {
+        await selectFootprint(matched[0].id)
+      }
+    }
+  } catch (error) {
+    showSystemNotice(error.response?.data?.error || 'AI 搜索失败，请稍后再试。', 'error')
+  } finally {
+    aiBusy.value.search = false
+  }
+}
+
+async function runAiJourneyTitle() {
+  if (!ensureAiAccess() || aiBusy.value.journey || !canSubmitJourney.value) return
+  aiBusy.value.journey = true
+  try {
+    const { data } = await generateJourneyTitle({
+      journey: {
+        from_city_name: getCityNameById(journeyFormData.value.from_city_id),
+        to_city_name: getCityNameById(journeyFormData.value.to_city_id),
+        transport_type: journeyFormData.value.transport_type,
+        transport_name: journeyFormData.value.transport_name,
+        departure_time: journeyFormData.value.departure_time,
+        arrival_time: journeyFormData.value.arrival_time,
+        notes: journeyFormData.value.notes,
+      },
+    })
+    if (data.title && !journeyFormData.value.transport_name) {
+      journeyFormData.value.transport_name = data.title
+    }
+    if (data.note) {
+      journeyFormData.value.notes = data.note
+    }
+    showToast('AI 已生成路线文案')
+  } catch (error) {
+    showSystemNotice(error.response?.data?.error || 'AI 路线命名失败，请稍后再试。', 'error')
+  } finally {
+    aiBusy.value.journey = false
+  }
+}
+
 function getThemePreviewStyle(theme) {
   return {
     '--preview-primary': theme.primary,
@@ -1783,6 +2008,12 @@ const collectionTip = computed(() => {
   return '所有旧日子都按地点收好，想念哪一段，就从这里再走进去。'
 })
 
+const currentAiScope = computed(() => {
+  if (currentCityArea.value) return `${currentProvince.value?.name || ''} · ${currentCityArea.value.name}`
+  if (currentProvince.value) return currentProvince.value.name
+  return '世界足迹星球'
+})
+
 const visitedProvinces = computed(() => {
   const provinceIds = placesStore.cities.map((city) => city.province_id).filter(Boolean)
   return [...new Set(provinceIds)].length
@@ -1805,6 +2036,11 @@ const scopedCities = computed(() => {
 const filteredCities = computed(() => {
   let source = scopedCities.value.slice()
   const query = searchQuery.value.trim().toLowerCase()
+
+  if (aiMatchedIds.value.length) {
+    const matched = new Set(aiMatchedIds.value)
+    source = source.filter((city) => matched.has(city.id))
+  }
 
   if (query) {
     source = source.filter((city) => {
@@ -2629,17 +2865,43 @@ function requestMapResize(delay = 60) {
 
 // ========== MapLibre GL 地图函数 ==========
 
-function getTileSource(skinId) {
-  // OSM 标准底图使用当地语言标注，中国区域会优先显示中文名称。
+function getPrimaryTileSource() {
+  // AMap is more reliable on China mobile networks and keeps Chinese labels baked into the tiles.
+  return {
+    type: 'raster',
+    tiles: [
+      'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+    ],
+    tileSize: 256,
+    minzoom: 1,
+    maxzoom: 18,
+    attribution: 'AMap',
+  }
+}
+
+function getBackupTileSource() {
   return {
     type: 'raster',
     tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
     tileSize: 256,
+    minzoom: 0,
+    maxzoom: 19,
     attribution: '© OpenStreetMap contributors',
   }
 }
 
-function getOSMLayerPaint(skinId) {
+function getBackupTileLayerPaint(skinId) {
+  const basePaint = getBaseTileLayerPaint(skinId)
+  return {
+    ...basePaint,
+    'raster-opacity': Math.min(basePaint['raster-opacity'] ?? 0.72, 0.58),
+  }
+}
+
+function getBaseTileLayerPaint(skinId) {
   // 根据主题调整瓦片显示效果
   switch (skinId) {
     case 'night':
@@ -2713,7 +2975,8 @@ function buildMaplibreStyle() {
     projection: { type: 'globe' },
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
-      'osm-tiles': getTileSource(activeMapSkin.value),
+      'backup-tiles': getBackupTileSource(),
+      'base-tiles': getPrimaryTileSource(),
       'footprints': {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -2747,10 +3010,16 @@ function buildMaplibreStyle() {
       },
       // OSM瓦片层（带主题滤镜）
       {
-        id: 'osm-layer',
+        id: 'backup-tile-layer',
         type: 'raster',
-        source: 'osm-tiles',
-        paint: getOSMLayerPaint(activeMapSkin.value),
+        source: 'backup-tiles',
+        paint: getBackupTileLayerPaint(activeMapSkin.value),
+      },
+      {
+        id: 'base-tile-layer',
+        type: 'raster',
+        source: 'base-tiles',
+        paint: getBaseTileLayerPaint(activeMapSkin.value),
       },
       // 海洋暗部光照层（globe模式下增强真实感）
       {
@@ -4314,6 +4583,46 @@ watch(
   transition: transform 0.22s ease, border-color 0.22s ease, background-color 0.22s ease;
 }
 
+.ai-memory-card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--panel-border));
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 16%, transparent), transparent 42%),
+    color-mix(in srgb, var(--button-bg) 70%, transparent);
+}
+
+.ai-memory-card h3 {
+  margin: 2px 0 8px;
+  font-family: 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', serif;
+  font-size: 1.18rem;
+}
+
+.ai-memory-card p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.65;
+}
+
+.ai-highlight-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-highlight-list li {
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--button-bg) 72%, transparent);
+  color: var(--text-main);
+  font-size: 0.88rem;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4405,6 +4714,24 @@ watch(
   grid-template-columns: minmax(0, 1fr) 120px;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.ai-search-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ai-action-btn {
+  white-space: nowrap;
+}
+
+.ai-inline-note {
+  margin: -2px 0 12px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 
 .search-input,
@@ -5781,6 +6108,18 @@ watch(
   font-family: 'Noto Serif SC', serif;
 }
 
+.field-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.field-title-row .mini-btn {
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+
 .full-span {
   grid-column: 1 / -1;
 }
@@ -6248,6 +6587,7 @@ watch(
   }
 
   .search-controls,
+  .ai-search-box,
   .region-metrics,
   .photo-tools {
     grid-template-columns: 1fr;

@@ -3,6 +3,19 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 
+const envPath = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  fs.readFileSync(envPath, 'utf8')
+    .split(/\r?\n/)
+    .forEach((line) => {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
+      if (!match) return;
+      const [, key, rawValue] = match;
+      if (process.env[key]) return;
+      process.env[key] = rawValue.replace(/^["']|["']$/g, '');
+    });
+}
+
 const db = require('./db/database');
 
 const placesRoutes = require('./routes/places');
@@ -10,6 +23,7 @@ const photosRoutes = require('./routes/photos');
 const authRoutes = require('./routes/auth');
 const themesRoutes = require('./routes/themes');
 const journeysRoutes = require('./routes/journeys');
+const aiRoutes = require('./routes/ai');
 
 const app = express();
 const PORT = 8080;
@@ -31,6 +45,7 @@ app.use('/api/photos', photosRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/themes', themesRoutes);
 app.use('/api/journeys', journeysRoutes);
+app.use('/api/ai', aiRoutes);
 
 // 照片静态文件服务
 app.use('/photos', express.static(photosDir));

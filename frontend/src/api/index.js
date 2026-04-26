@@ -99,4 +99,16 @@ export const updateJourney = (id, data) => api.put(`/journeys/${id}`, data)
 // 删除旅程
 export const deleteJourney = (id) => api.delete(`/journeys/${id}`)
 
+// AI：生成足迹标题、描述和标签
+export const generateFootprintDraft = (data) => api.post('/ai/footprint-draft', data)
+
+// AI：总结当前地图视角
+export const generateMapSummary = (data) => api.post('/ai/map-summary', data)
+
+// AI：自然语言搜索足迹
+export const searchFootprintsWithAi = (data) => api.post('/ai/search', data)
+
+// AI：生成旅程路线名称和备注
+export const generateJourneyTitle = (data) => api.post('/ai/journey-title', data)
+
 export default api
