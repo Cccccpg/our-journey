@@ -1,5 +1,5 @@
 <template>
-  <div ref="appShellRef" class="app-shell" :style="appStyle">
+  <div ref="appShellRef" class="app-shell" :style="appStyle" @scroll="handleWindowScroll">
     <div class="ambient-layer">
       <div class="gradient-orb orb-1"></div>
       <div class="gradient-orb orb-2"></div>
@@ -77,7 +77,15 @@
       </div>
     </header>
 
-    <main class="workspace" :class="{ 'mobile-mode': isMobile, 'empty-footprints': placesStore.cities.length === 0 }">
+    <transition name="notice-slide">
+      <div v-if="systemNoticeMessage" class="system-notice panel panel-soft" :class="systemNoticeType">
+        <span class="notice-dot"></span>
+        <span class="notice-copy">{{ systemNoticeMessage }}</span>
+        <button class="notice-close" type="button" @click="dismissSystemNotice">知道了</button>
+      </div>
+    </transition>
+
+    <main class="workspace" :class="{ 'mobile-mode': isMobile, 'empty-footprints': placesStore.cities.length === 0, 'no-selection': !selectedFootprint && placesStore.cities.length > 0 }">
       <!-- 空数据引导提示 -->
       <div v-if="showEmptyGuide" class="empty-state-overlay">
         <div class="empty-guide-card panel panel-soft animate-scale-in">
@@ -270,11 +278,15 @@
             <p class="stage-subcopy">{{ currentActionHint }}</p>
           </div>
           <div class="map-stage-actions">
-            <button class="ghost-btn" :class="{ 'active-badge': viewMode === 'map' }" @click="viewMode = 'map'">地图</button>
-            <button class="ghost-btn" :class="{ 'active-badge': viewMode === 'timeline' }" @click="viewMode = 'timeline'">时间轴</button>
-            <button class="ghost-btn" @click="zoomOut">缩小</button>
-            <button class="ghost-btn" @click="resetView">重置</button>
-            <button class="ghost-btn" @click="zoomIn">放大</button>
+            <div class="stage-mode-group" role="group" aria-label="地图视图切换">
+              <button class="ghost-btn" :class="{ 'active-badge': viewMode === 'map' }" @click="viewMode = 'map'">地图</button>
+              <button class="ghost-btn" :class="{ 'active-badge': viewMode === 'timeline' }" @click="viewMode = 'timeline'">时间轴</button>
+            </div>
+            <div class="map-zoom-cluster" role="group" aria-label="地图缩放控制">
+              <button class="zoom-chip" type="button" @click="zoomOut">−</button>
+              <button class="zoom-chip reset" type="button" @click="resetView">重置</button>
+              <button class="zoom-chip" type="button" @click="zoomIn">+</button>
+            </div>
           </div>
         </div>
 
@@ -372,7 +384,7 @@
         </div>
       </section>
 
-      <aside class="detail-panel panel panel-strong" :class="{ 'mobile-hidden': isMobile && mobileView !== 'detail' }">
+      <aside class="detail-panel panel panel-strong" :class="{ 'mobile-hidden': isMobile && mobileView !== 'detail', 'idle-detail-panel': !selectedFootprint && !selectedCluster }">
         <template v-if="selectedFootprint">
           <div class="detail-header">
             <span class="eyebrow">Memory Detail</span>
@@ -485,6 +497,12 @@
             <span class="eyebrow">Memory Detail</span>
             <h2>{{ emptyDetailTitle }}</h2>
             <p>{{ emptyDetailDescription }}</p>
+            <div class="detail-empty-actions">
+              <button class="ghost-btn" type="button" @click="resetView">回到世界</button>
+              <button class="ghost-btn" type="button" @click="showThemePanel = true">切换主题</button>
+              <button class="primary-btn" type="button" :disabled="!editMode.isAuthenticated" @click="openQuickAdd">添加足迹</button>
+            </div>
+            <small v-if="!editMode.isAuthenticated" class="detail-empty-note">解锁编辑后，就可以从地图选点补充新的旅行记忆。</small>
           </div>
         </template>
 
@@ -982,18 +1000,17 @@
       </div>
     </transition>
 
-    <transition name="overlay-fade">
-      <div v-if="isLoading" class="loading-overlay">
-        <div class="loading-card panel panel-soft animate-scale-in">
-          <div class="spinner"></div>
-          <p>{{ loadingText }}</p>
-        </div>
+    <!-- 非遮挡式加载状态条 -->
+    <transition name="status-slide">
+      <div v-if="isLoading" class="status-bar">
+        <div class="status-spinner"></div>
+        <span>{{ loadingText }}</span>
       </div>
     </transition>
 
-    <!-- Toast 提示 -->
+    <!-- Toast 提示（只用于成功反馈） -->
     <transition name="toast-slide">
-      <div v-if="toastMessage" class="toast-container" :class="toastType">
+      <div v-if="toastMessage && toastType === 'success'" class="toast-container success">
         <span class="toast-icon">{{ toastType === 'success' ? '✓' : toastType === 'error' ? '✗' : 'ℹ' }}</span>
         <span class="toast-message">{{ toastMessage }}</span>
       </div>
@@ -1046,10 +1063,17 @@ const loadingText = ref('加载中...')
 // Toast 提示系统
 const toastMessage = ref('')
 const toastType = ref('info')
+const systemNoticeMessage = ref('')
+const systemNoticeType = ref('info')
 const topbarCondensed = ref(false)
 let toastTimer = null
 
 function showToast(message, type = 'success', duration = 3000) {
+  // Toast只用于成功反馈，错误使用系统通知
+  if (type === 'error') {
+    showSystemNotice(message, 'error')
+    return
+  }
   toastMessage.value = message
   toastType.value = type
   if (toastTimer) clearTimeout(toastTimer)
@@ -1058,8 +1082,18 @@ function showToast(message, type = 'success', duration = 3000) {
   }, duration)
 }
 
+function showSystemNotice(message, type = 'info') {
+  systemNoticeMessage.value = message
+  systemNoticeType.value = type
+}
+
+function dismissSystemNotice() {
+  systemNoticeMessage.value = ''
+}
+
 function updateTopbarCondensed() {
-  topbarCondensed.value = window.scrollY > (isMobile.value ? 70 : 120)
+  const scrollTop = Math.max(window.scrollY || 0, appShellRef.value?.scrollTop || 0)
+  topbarCondensed.value = scrollTop > (isMobile.value ? 70 : 120)
 }
 
 function handleWindowScroll() {
@@ -2264,8 +2298,40 @@ function zoomOut() {
   setMapZoom(getCurrentMapZoom() / 1.3)
 }
 
+function shouldReleaseMapWheelToPage(event) {
+  const stage = mapStageBodyRef.value
+  if (!stage) return false
+
+  const rect = stage.getBoundingClientRect()
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+
+  // 地图是否完整显示在视口中
+  const isFullyVisible = rect.top >= 0 && rect.bottom <= viewportHeight
+
+  // 如果地图完整显示，允许滚轮缩放地图
+  // 如果地图部分超出视口，滚动应该释放给页面
+  if (!isFullyVisible) {
+    const hasHiddenBottom = rect.bottom > viewportHeight - 8
+    const hasHiddenTop = rect.top < 8
+    if (event.deltaY > 0 && hasHiddenBottom) return true
+    if (event.deltaY < 0 && hasHiddenTop && window.scrollY > 0) return true
+  }
+
+  // 达到缩放边界时也释放给页面
+  if (mapInstance) {
+    const currentZoom = mapInstance.getZoom()
+    const minZoom = mapInstance.getMinZoom()
+    const maxZoom = mapInstance.getMaxZoom()
+    if (event.deltaY > 0 && currentZoom <= minZoom + 0.5) return true
+    if (event.deltaY < 0 && currentZoom >= maxZoom - 0.5) return true
+  }
+
+  return false
+}
+
 function handleMapWheel(event) {
   if (viewMode.value !== 'map' || !mapInstance) return
+  if (shouldReleaseMapWheelToPage(event)) return
   event.preventDefault()
   event.stopPropagation()
   const canvas = mapInstance.getCanvas()
@@ -2282,7 +2348,8 @@ function handleMapWheel(event) {
     duration: 170,
     easing: (t) => 1 - Math.pow(1 - t, 3),
   }
-  if (currentZoom >= 5) {
+  const projectionType = mapInstance.getProjection?.()?.type
+  if (currentZoom >= 5 && projectionType !== 'globe') {
     options.around = around
   }
   mapInstance.zoomTo(nextZoom, options)
@@ -2656,17 +2723,30 @@ function buildMaplibreStyle() {
       },
     },
     layers: [
-      // 基础底图
+      // 深色海洋背景（增强层次感）
       {
         id: 'background',
         type: 'background',
-        paint: { 'background-color': skin.sea || '#f5f5f5' },
+        paint: {
+          'background-color': skin.sea || '#f5f5f5',
+          'background-opacity': 1,
+        },
       },
+      // OSM瓦片层（带主题滤镜）
       {
         id: 'osm-layer',
         type: 'raster',
         source: 'osm-tiles',
         paint: getOSMLayerPaint(activeMapSkin.value),
+      },
+      // 海洋暗部光照层（globe模式下增强真实感）
+      {
+        id: 'ocean-glow',
+        type: 'background',
+        paint: {
+          'background-color': activeMapSkin.value === 'night' ? 'rgba(11, 17, 28, 0.3)' : 'rgba(255, 250, 240, 0.15)',
+          'background-opacity': (!currentProvince.value && !currentCityArea.value) ? 0.25 : 0,
+        },
       },
       // 全国省份边界填充（globe视图下显示）
       {
@@ -2830,11 +2910,24 @@ function buildMaplibreStyle() {
         source: 'footprints',
         filter: ['==', ['get', 'type'], 'point'],
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 5.5, 7, 10, 13, 16],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 6, 7, 12, 13, 18],
           'circle-color': skin.point,
-          'circle-stroke-color': activeMapSkin.value === 'night' ? skin.label : 'rgba(255,255,255,0.9)',
-          'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 2, 1.4, 9, 2.4],
-          'circle-opacity': 0.95,
+          'circle-stroke-color': activeMapSkin.value === 'night' ? 'rgba(255, 191, 95, 0.6)' : 'rgba(255, 255, 255, 0.92)',
+          'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 2, 2, 9, 3],
+          'circle-opacity': 0.92,
+          'circle-blur': 0.1, // 添加轻微模糊增强发光效果
+        },
+      },
+      // 足迹发光层（增强真实感）
+      {
+        id: 'footprint-glow',
+        type: 'circle',
+        source: 'footprints',
+        filter: ['==', ['get', 'type'], 'point'],
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 9, 7, 18, 13, 26],
+          'circle-color': skin.pointHalo || 'rgba(201, 79, 53, 0.2)',
+          'circle-opacity': 0.25,
         },
       },
       // 足迹标签
@@ -3438,11 +3531,11 @@ onMounted(async () => {
     await placesStore.fetchPlaces().catch(() => {
       placesStore.provinces = []
       placesStore.cities = []
-      showToast('足迹数据暂时加载失败，地图框架仍可预览', 'error', 4200)
+      showSystemNotice('足迹数据暂时加载失败，地图框架仍可预览。', 'error')
     })
     await placesStore.fetchJourneys().catch(() => {
       placesStore.journeys = []
-      showToast('旅程数据暂时加载失败，地图足迹仍可正常浏览', 'error', 4200)
+      showSystemNotice('旅程数据暂时加载失败，地图足迹仍可正常浏览。', 'error')
     })
     await nextTick()
     await initMap()
@@ -3668,9 +3761,9 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 24px 28px;
+  padding: 14px 20px;
   border-radius: 28px;
-  margin-bottom: 24px;
+  margin-bottom: 10px;
   transform-origin: top center;
   transition:
     padding 0.24s ease,
@@ -3681,7 +3774,7 @@ watch(
 }
 
 .topbar.condensed {
-  padding: 12px 18px;
+  padding: 10px 16px;
   border-radius: 999px;
   box-shadow: 0 16px 46px color-mix(in srgb, var(--dark) 18%, transparent);
 }
@@ -3691,6 +3784,14 @@ watch(
 }
 
 .topbar.condensed .eyebrow,
+.topbar.condensed .brand-block p,
+.topbar.condensed .breadcrumb-bar {
+  display: none;
+}
+
+.topbar.condensed h1 {
+  font-size: 1.1rem;
+}
 .topbar.condensed .brand-block p,
 .topbar.condensed .breadcrumb-bar {
   display: none;
@@ -3812,6 +3913,48 @@ watch(
   justify-content: flex-end;
 }
 
+.stage-mode-group,
+.map-zoom-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--button-bg) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--panel-border) 70%, transparent);
+}
+
+.map-zoom-cluster {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, white 18%, transparent);
+}
+
+.zoom-chip {
+  min-width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--button-text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.zoom-chip.reset {
+  min-width: 56px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+
+.zoom-chip:hover,
+.zoom-chip:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
 .ghost-btn,
 .primary-btn,
 .danger-btn,
@@ -3902,27 +4045,42 @@ watch(
   grid-template-columns: minmax(260px, 340px) minmax(520px, 1fr) minmax(270px, 360px);
   gap: 24px;
   align-items: stretch;
-  min-height: calc(100vh - 152px);
-  min-height: calc(100dvh - 152px);
+  height: calc(100vh - 72px);
+  height: calc(100dvh - 72px);
 }
 
 .workspace.empty-footprints {
-  grid-template-columns: minmax(620px, 1fr) minmax(340px, 520px);
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+}
+
+.workspace.empty-footprints .sidebar {
+  max-width: 340px;
+}
+
+/* 没有选中足迹时，地图更宽，右侧面板变轻 */
+.workspace.no-selection {
+  grid-template-columns: minmax(260px, 320px) minmax(580px, 1fr) minmax(240px, 300px);
+}
+
+.workspace.no-selection .detail-panel {
+  opacity: 0.7;
+  transform: scale(0.98);
 }
 
 .sidebar,
-.map-stage,
 .detail-panel {
   min-height: 0;
+  height: 100%;
   border-radius: 32px;
+  overflow: auto;
 }
 
 .sidebar,
 .detail-panel {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 24px;
+  gap: 14px;
+  padding: 20px;
   overflow: visible;
 }
 
@@ -4255,16 +4413,17 @@ watch(
 /* Toast 提示 */
 .toast-container {
   position: fixed;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 800;
+  right: 24px;
+  bottom: 24px;
+  z-index: 420;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 24px;
-  border-radius: 999px;
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 12px 16px;
+  border-radius: 20px;
   backdrop-filter: blur(16px);
+  pointer-events: none;
   font-weight: 500;
 }
 
@@ -4300,41 +4459,96 @@ watch(
 
 .toast-slide-enter-from {
   opacity: 0;
-  transform: translateX(-50%) translateY(-20px);
+  transform: translateY(14px);
 }
 
 .toast-slide-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(-20px);
+  transform: translateY(14px);
+}
+
+.system-notice {
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: min(760px, 100%);
+  margin: -2px 0 14px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 999px;
+  color: var(--text-main);
+}
+
+.system-notice.error {
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 64%, var(--panel-soft-bg));
+}
+
+.notice-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.notice-copy {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.notice-close {
+  border: none;
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--button-text);
+  cursor: pointer;
+  font: inherit;
+  padding: 6px 10px;
+}
+
+.notice-slide-enter-active,
+.notice-slide-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.notice-slide-enter-from,
+.notice-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 .map-stage {
-  padding: 22px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-height: 620px;
+  min-height: 0;
+  height: 100%;
 }
 
 .map-stage-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .stage-subcopy {
-  margin: 8px 0 0;
+  max-width: 42rem;
+  margin: 6px 0 0;
   color: var(--text-muted);
-  line-height: 1.6;
+  line-height: 1.55;
 }
 
 .map-stage-body {
   position: relative;
   isolation: isolate;
   flex: 1;
-  min-height: 500px;
+  min-height: 0;
   overflow: hidden;
   border-radius: 26px;
   background: var(--map-stage-bg);
@@ -4750,11 +4964,49 @@ watch(
   right: 18px;
   bottom: 18px;
   min-width: 180px;
-  background: var(--map-panel-bg);
+  background: linear-gradient(135deg, var(--map-panel-bg), color-mix(in srgb, var(--map-skin-glow) 15%, transparent));
   border: 1px solid color-mix(in srgb, var(--map-skin-border) 28%, transparent);
   backdrop-filter: blur(18px);
   color: var(--map-skin-label);
-  box-shadow: 0 18px 42px rgba(36, 26, 19, 0.13);
+  box-shadow: 0 18px 42px rgba(36, 26, 19, 0.13), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.legend-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--map-skin-label);
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--map-skin-glow), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.legend-dot.strong {
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.legend-line {
+  width: 24px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  border-radius: 1px;
 }
 
 .timeline-board {
@@ -4851,41 +5103,6 @@ watch(
 
 .timeline-empty {
   margin-top: 12px;
-}
-
-.legend-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  color: color-mix(in srgb, var(--map-skin-label) 82%, transparent);
-}
-
-.legend-dot,
-.legend-line {
-  display: inline-flex;
-  flex: none;
-}
-
-.legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--map-skin-label);
-  box-shadow: 0 0 0 6px var(--map-skin-glow);
-}
-
-.legend-dot.strong {
-  width: 14px;
-  height: 14px;
-  background: var(--accent);
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.legend-line {
-  width: 28px;
-  height: 2px;
-  background: linear-gradient(90deg, var(--primary), var(--map-skin-glow), transparent);
 }
 
 .hero-photo {
@@ -4989,7 +5206,33 @@ watch(
 }
 
 .detail-empty {
+  display: grid;
+  gap: 12px;
   padding: 8px 0 12px;
+}
+
+.idle-detail-panel {
+  background:
+    radial-gradient(circle at 80% 8%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 30%),
+    var(--panel-strong-bg);
+}
+
+.detail-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.detail-empty-actions .ghost-btn,
+.detail-empty-actions .primary-btn {
+  flex: 1 1 130px;
+  justify-content: center;
+}
+
+.detail-empty-note {
+  color: var(--text-muted);
+  line-height: 1.6;
 }
 
 .cluster-summary {
@@ -5338,31 +5581,41 @@ watch(
   border-radius: 16px;
 }
 
-.loading-overlay {
+/* 非遮挡式状态条 */
+.status-bar {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 700;
-  background: rgba(248, 244, 232, 0.78);
-  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, rgba(139, 89, 54, 0.12), transparent);
+  font-size: 13px;
+  color: var(--text-main);
 }
 
-.loading-card {
-  padding: 24px 32px;
-  border-radius: 24px;
-  text-align: center;
-}
-
-.spinner {
-  width: 42px;
-  height: 42px;
-  margin: 0 auto 12px;
+.status-spinner {
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  border: 3px solid rgba(187, 77, 51, 0.16);
+  border: 2px solid rgba(187, 77, 51, 0.2);
   border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
+}
+
+.status-slide-enter-active,
+.status-slide-leave-active {
+  transition: all 0.25s ease;
+}
+
+.status-slide-enter-from,
+.status-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 
 .tooltip-fade-enter-active,
@@ -5441,7 +5694,7 @@ watch(
   }
 
   .workspace.empty-footprints {
-    grid-template-columns: minmax(560px, 1fr) minmax(320px, 460px);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar,
@@ -5458,7 +5711,8 @@ watch(
 
   .workspace {
     grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-    min-height: 0;
+    height: auto;
+    min-height: calc(100dvh - 136px);
   }
 
   .workspace.empty-footprints {
@@ -5466,7 +5720,7 @@ watch(
   }
 
   .map-stage {
-    min-height: 72vh;
+    min-height: min(720px, calc(100dvh - 160px));
   }
 
   .detail-panel {
@@ -5474,7 +5728,7 @@ watch(
   }
 
   .map-stage-body {
-    min-height: 58vh;
+    min-height: clamp(430px, calc(100dvh - 280px), 620px);
   }
 }
 
@@ -5486,20 +5740,22 @@ watch(
 
   .workspace {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .workspace .sidebar,
   .workspace .map-stage,
   .workspace .detail-panel {
     width: 100%;
+    height: auto;
   }
 
   .topbar {
-    padding: 16px 20px;
+    padding: 14px 18px;
   }
 
   .brand-block h1 {
-    font-size: 1.5rem;
+    font-size: 1.4rem;
   }
 
   .brand-block p {
@@ -5511,11 +5767,11 @@ watch(
   }
 
   .map-stage {
-    min-height: calc(100vh - 160px);
+    min-height: min(600px, calc(100dvh - 140px));
   }
 
   .map-stage-body {
-    min-height: calc(100vh - 220px);
+    min-height: clamp(380px, calc(100dvh - 240px), 560px);
   }
 
   .topbar-actions,
@@ -5537,16 +5793,28 @@ watch(
     padding-bottom: 112px;
   }
 
+  .system-notice {
+    width: 100%;
+    border-radius: 20px;
+    align-items: flex-start;
+  }
+
+  .toast-container {
+    right: 12px;
+    bottom: calc(86px + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 24px);
+  }
+
   .mobile-hidden {
     display: none !important;
   }
 
   .map-stage {
-    min-height: 620px;
+    min-height: calc(100dvh - 136px);
   }
 
   .map-stage-body {
-    min-height: 470px;
+    min-height: clamp(420px, calc(100dvh - 285px), 560px);
   }
 
   .topbar,
@@ -5571,6 +5839,15 @@ watch(
   .topbar-actions,
   .map-stage-actions {
     justify-content: flex-start;
+  }
+
+  .stage-mode-group,
+  .map-zoom-cluster {
+    flex: 1 1 auto;
+  }
+
+  .map-zoom-cluster {
+    justify-content: space-between;
   }
 
   .search-controls,
@@ -5691,7 +5968,7 @@ watch(
   }
 
   .topbar {
-    padding: 20px;
+    padding: 16px;
   }
 
   .topbar.mobile-compact .brand-block p {
@@ -5704,11 +5981,11 @@ watch(
 
   .map-stage {
     padding: 14px;
-    min-height: 560px;
+    min-height: calc(100dvh - 128px);
   }
 
   .map-stage-body {
-    min-height: 430px;
+    min-height: clamp(400px, calc(100dvh - 274px), 520px);
     border-radius: 20px;
   }
 
