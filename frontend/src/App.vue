@@ -1,5 +1,11 @@
 <template>
-  <div ref="appShellRef" class="app-shell" :style="appStyle" @scroll="handleWindowScroll">
+  <div
+    ref="appShellRef"
+    class="app-shell"
+    :class="{ 'immersive-space': isGlobeSpaceView, 'panels-collapsed': panelsCollapsed }"
+    :style="appStyle"
+    @scroll="handleWindowScroll"
+  >
     <div class="ambient-layer">
       <div class="gradient-orb orb-1"></div>
       <div class="gradient-orb orb-2"></div>
@@ -36,9 +42,9 @@
           <span class="status-pill">{{ currentViewBadge }}</span>
         </div>
         <p>{{ currentViewDescription }}</p>
-        <div class="breadcrumb-bar" v-if="breadcrumbTrail.length">
+        <div class="breadcrumb-bar" v-if="visibleBreadcrumbTrail.length">
           <button
-            v-for="crumb in breadcrumbTrail"
+            v-for="crumb in visibleBreadcrumbTrail"
             :key="crumb.id"
             class="breadcrumb-chip"
             :class="{ active: crumb.active }"
@@ -50,9 +56,12 @@
       </div>
 
       <div class="topbar-actions">
-        <button v-if="currentCityArea" class="ghost-btn" @click="backToProvince">返回城市</button>
-        <button v-if="currentProvince" class="ghost-btn" @click="backToChina">返回世界</button>
+        <button v-if="currentCityArea" class="ghost-btn" @click="backToProvince">上一级城市</button>
+        <button v-if="currentProvince" class="ghost-btn" @click="backToChina">世界视角</button>
         <button class="ghost-btn" @click="showThemePanel = true">切换风格</button>
+        <button class="ghost-btn focus-toggle-btn" @click="panelsCollapsed = !panelsCollapsed">
+          {{ panelsCollapsed ? '显示卡片' : '专注地图' }}
+        </button>
         <button
           v-if="!editMode.isAuthenticated"
           class="ghost-btn"
@@ -85,7 +94,15 @@
       </div>
     </transition>
 
-    <main class="workspace" :class="{ 'mobile-mode': isMobile, 'empty-footprints': placesStore.cities.length === 0, 'no-selection': !selectedFootprint && placesStore.cities.length > 0 }">
+    <main
+      class="workspace"
+      :class="{
+        'mobile-mode': isMobile,
+        'empty-footprints': placesStore.cities.length === 0,
+        'no-selection': !selectedFootprint && placesStore.cities.length > 0,
+        'panels-collapsed': panelsCollapsed,
+      }"
+    >
       <!-- 空数据引导提示 -->
       <div v-if="showEmptyGuide" class="empty-state-overlay">
         <div class="empty-guide-card panel panel-soft animate-scale-in">
@@ -326,6 +343,13 @@
 
           <div ref="mapRef" class="maplibre-container" :class="{ muted: viewMode === 'timeline' }"></div>
           <transition name="map-wash">
+            <div v-if="viewMode === 'map' && !isMapTextureReady" class="map-texture-loader">
+              <span class="texture-orbit"></span>
+              <strong>正在绘制地球纹理</strong>
+              <small>边界、地名和足迹图层马上就绪</small>
+            </div>
+          </transition>
+          <transition name="map-wash">
             <div v-if="mapTransitioning" class="map-transition-overlay">
               <span>{{ transitionText }}</span>
             </div>
@@ -338,7 +362,11 @@
             </div>
           </transition>
 
-          <div v-if="viewMode === 'map'" class="legend-card panel panel-soft">
+          <div v-if="viewMode === 'map'" class="legend-card panel panel-soft" :class="{ collapsed: legendCollapsed }">
+            <button class="legend-toggle" type="button" @click="legendCollapsed = !legendCollapsed">
+              <span class="legend-title-clean">图层</span>
+              <span>{{ legendCollapsed ? '展开' : '收起' }}</span>
+            </button>
             <span class="legend-title">图层说明</span>
             <div class="legend-row">
               <i class="legend-dot"></i>
@@ -358,7 +386,7 @@
             <div class="timeline-board-header">
               <span class="eyebrow">Chronicle View</span>
               <h3>按时间重看这片区域</h3>
-              <p>时间轴会跟随当前地图层级、关键词和年份筛选变化，适合从故事脉络回到地图点位。</p>
+              <p>时间轴会跟随当前地图层级、关键词和年份筛选变化，适合把故事脉络落到地图点位。</p>
             </div>
             <div v-if="timelineGroups.length" class="timeline-board-list">
               <section v-for="group in timelineGroups" :key="group.year" class="timeline-year-group">
@@ -449,7 +477,7 @@
               class="primary-btn full-width"
               @click="editFootprint(selectedFootprint)"
             >
-              编辑这段回忆
+              编辑这段记忆
             </button>
           </div>
 
@@ -498,7 +526,8 @@
             <h2>{{ emptyDetailTitle }}</h2>
             <p>{{ emptyDetailDescription }}</p>
             <div class="detail-empty-actions">
-              <button class="ghost-btn" type="button" @click="resetView">回到世界</button>
+              <button v-if="!editMode.isAuthenticated" class="primary-btn" type="button" @click="openPasswordModal">解锁后添加</button>
+              <button class="ghost-btn" type="button" @click="resetView">世界视角</button>
               <button class="ghost-btn" type="button" @click="showThemePanel = true">切换主题</button>
               <button class="primary-btn" type="button" :disabled="!editMode.isAuthenticated" @click="openQuickAdd">添加足迹</button>
             </div>
@@ -609,7 +638,7 @@
             </label>
 
             <label class="field-block full-span">
-              <span>回忆描述</span>
+              <span>记忆描述</span>
               <textarea
                 v-model="formData.description"
                 class="field-control textarea"
@@ -720,7 +749,7 @@
             </label>
 
             <label class="field-block full-span">
-              <span>回忆描述</span>
+              <span>记忆描述</span>
               <textarea
                 v-model="editData.description"
                 class="field-control textarea"
@@ -1110,7 +1139,10 @@ const viewMode = ref('map')
 const activeMapSkin = ref(localStorage.getItem('mapSkin') || 'warm')
 const emptyGuideDismissed = ref(localStorage.getItem('emptyGuideDismissed') !== '0')
 const mapOverlayCollapsed = ref(true)
+const legendCollapsed = ref(true)
+const isMapTextureReady = ref(false)
 const mapZoomLevel = ref(DEFAULT_GLOBE_ZOOM)
+const panelsCollapsed = ref(false)
 
 // 手机端适配
 const MOBILE_BREAKPOINT = 768
@@ -1640,6 +1672,11 @@ const breadcrumbTrail = computed(() => {
   return trail
 })
 
+const visibleBreadcrumbTrail = computed(() => {
+  if (!currentProvince.value && !currentCityArea.value) return []
+  return breadcrumbTrail.value.filter((crumb) => !crumb.active)
+})
+
 const mapStageTitle = computed(() => {
   if (currentCityArea.value) return `${currentCityArea.value.name} · 细碎日光`
   if (currentProvince.value) return `${currentProvince.value.name} · 城市片段`
@@ -1649,13 +1686,16 @@ const mapStageTitle = computed(() => {
 const currentActionHint = computed(() => {
   if (currentCityArea.value) {
     return editMode.isAuthenticated
-      ? '点一个区县，把那天的照片、天气和心情放回原来的地方。'
+      ? '点一个区县，把那天的照片、天气和心情放在原来的地方。'
       : '这里适合重看一座城市里的小地方，那些不像景点、却很像你们的瞬间。'
   }
   if (currentProvince.value) {
     return '点开一座城市，看看这趟旅程在更细的地方留下了什么。'
   }
-  return '拖动旋转地球，滚轮自由缩放；足迹、照片和旅途路线会沿着经纬度浮在星球表面。'
+  if (isMobile.value) {
+    return '拖动旋转地球，双指捏合缩放地图；普通上下滑继续浏览页面。'
+  }
+  return '拖动旋转地球，鼠标停在地图内滚轮缩放；足迹、照片和旅途路线会沿着经纬度浮在星球表面。'
 })
 
 const currentLayerMetric = computed(() => {
@@ -1665,7 +1705,7 @@ const currentLayerMetric = computed(() => {
 })
 
 const currentActionShort = computed(() => {
-  if (currentCityArea.value) return '把回忆放进角落'
+  if (currentCityArea.value) return '把记忆放进角落'
   if (currentProvince.value) return '走进城市里面'
   return '拖动这颗星球'
 })
@@ -1687,7 +1727,7 @@ const mapOverlayDescription = computed(() => {
 })
 
 const emptyDetailTitle = computed(() => {
-  if (currentCityArea.value) return '等一段具体的小回忆'
+  if (currentCityArea.value) return '等一段具体的小记忆'
   if (currentProvince.value) return '选一座城市，翻开下一页'
   return '先从地图里点亮第一段故事'
 })
@@ -1699,7 +1739,7 @@ const emptyDetailDescription = computed(() => {
   if (currentProvince.value) {
     return '每座城市都有自己的语气。点开它，再把记忆放到更准确的位置。'
   }
-  return '可以从一个省份开始，也可以等下一次旅行回来，再把新的章节补上。'
+  return '可以从一个省份开始，也可以等下一次旅行结束后，再把新的章节补上。'
 })
 
 const collectionTip = computed(() => {
@@ -1709,7 +1749,7 @@ const collectionTip = computed(() => {
   if (currentProvince.value) {
     return '这一省里的记录都会在这里汇合，像一本按城市分好的旅行手账。'
   }
-  return '所有旧日子都按地点收好，想念哪一段，就从这里跳回去。'
+  return '所有旧日子都按地点收好，想念哪一段，就从这里再走进去。'
 })
 
 const visitedProvinces = computed(() => {
@@ -2298,64 +2338,6 @@ function zoomOut() {
   setMapZoom(getCurrentMapZoom() / 1.3)
 }
 
-function shouldReleaseMapWheelToPage(event) {
-  const stage = mapStageBodyRef.value
-  if (!stage) return false
-
-  const rect = stage.getBoundingClientRect()
-  const viewportHeight = window.innerHeight || document.documentElement.clientHeight
-
-  // 地图是否完整显示在视口中
-  const isFullyVisible = rect.top >= 0 && rect.bottom <= viewportHeight
-
-  // 如果地图完整显示，允许滚轮缩放地图
-  // 如果地图部分超出视口，滚动应该释放给页面
-  if (!isFullyVisible) {
-    const hasHiddenBottom = rect.bottom > viewportHeight - 8
-    const hasHiddenTop = rect.top < 8
-    if (event.deltaY > 0 && hasHiddenBottom) return true
-    if (event.deltaY < 0 && hasHiddenTop && window.scrollY > 0) return true
-  }
-
-  // 达到缩放边界时也释放给页面
-  if (mapInstance) {
-    const currentZoom = mapInstance.getZoom()
-    const minZoom = mapInstance.getMinZoom()
-    const maxZoom = mapInstance.getMaxZoom()
-    if (event.deltaY > 0 && currentZoom <= minZoom + 0.5) return true
-    if (event.deltaY < 0 && currentZoom >= maxZoom - 0.5) return true
-  }
-
-  return false
-}
-
-function handleMapWheel(event) {
-  if (viewMode.value !== 'map' || !mapInstance) return
-  if (shouldReleaseMapWheelToPage(event)) return
-  event.preventDefault()
-  event.stopPropagation()
-  const canvas = mapInstance.getCanvas()
-  const rect = canvas.getBoundingClientRect()
-  const point = [
-    Math.min(Math.max(event.clientX - rect.left, 0), rect.width),
-    Math.min(Math.max(event.clientY - rect.top, 0), rect.height),
-  ]
-  const around = mapInstance.unproject(point)
-  const currentZoom = mapInstance.getZoom()
-  const delta = event.deltaY < 0 ? 0.45 : -0.45
-  const nextZoom = clampMapZoom(currentZoom + delta)
-  const options = {
-    duration: 170,
-    easing: (t) => 1 - Math.pow(1 - t, 3),
-  }
-  const projectionType = mapInstance.getProjection?.()?.type
-  if (currentZoom >= 5 && projectionType !== 'globe') {
-    options.around = around
-  }
-  mapInstance.zoomTo(nextZoom, options)
-  globeAutoRotate = false
-}
-
 function resetView() {
   resetGlobeView()
   if (!mapInstance) return
@@ -2463,7 +2445,7 @@ async function loadDistrictMap(cityFeature) {
 function backToChina() {
   if (!mapInstance) return
   mapTransitioning.value = true
-  transitionText.value = '返回世界'
+  transitionText.value = '世界视角'
   currentProvince.value = null
   currentCityArea.value = null
   activeFilter.value = 'all'
@@ -2489,7 +2471,7 @@ function backToChina() {
 function backToProvince() {
   if (!mapInstance || !currentProvince.value) return
   mapTransitioning.value = true
-  transitionText.value = `返回 ${currentProvince.value?.name || '省份'}`
+  transitionText.value = `退到 ${currentProvince.value?.name || '省份'}`
   currentCityArea.value = null
   activeFilter.value = 'all'
   closeFootprintPanel()
@@ -3127,6 +3109,7 @@ async function loadFullChinaBoundary() {
 
 function updateMapView() {
   if (!mapInstance) return
+  isMapTextureReady.value = false
 
   // 清除旧的 DOM 标注，省份名称不再使用浮层小卡片显示。
   clearProvinceLabelMarkers()
@@ -3146,6 +3129,9 @@ function updateMapView() {
     }
 
     updateFootprintMarkers()
+    window.setTimeout(() => {
+      isMapTextureReady.value = true
+    }, 320)
   })
 }
 
@@ -3168,6 +3154,7 @@ function stopAutoRotate() {
 
 async function initMap() {
   if (!mapRef.value) return
+  isMapTextureReady.value = false
 
   const maplibreGl = await loadMapLibreGL()
   maplibreGlModule = maplibreGl // 存储模块供后续使用
@@ -3181,20 +3168,25 @@ async function initMap() {
     minZoom: 0.7,
     projection: 'globe',
     attributionControl: false,
+    scrollZoom: true,
     pixelRatio: Math.min(window.devicePixelRatio, 1.5), // 限制像素比，减少渲染开销
     crossSourceCollisions: false, // 禁用跨源碰撞检测
   })
+  mapInstance.scrollZoom.enable()
+  mapInstance.touchZoomRotate.enable()
+  mapInstance.doubleClickZoom.enable()
+  mapInstance.dragPan.enable()
   syncMapZoomLevel()
-
-  // 添加导航控件
-  mapInstance.addControl(new maplibreGl.NavigationControl({ showCompass: false }), 'bottom-right')
 
   // 地图加载完成后的初始化
   mapInstance.on('load', async () => {
     // 立即加载中国边界数据，让用户能看到省份轮廓
-    loadFullChinaBoundary()
+    await loadFullChinaBoundary()
 
     updateFootprintMarkers()
+    window.setTimeout(() => {
+      isMapTextureReady.value = true
+    }, 450)
 
     // 开始自动旋转（globe 模式）
     startAutoRotate()
@@ -3306,9 +3298,6 @@ async function initMap() {
   mapResizeObserver?.disconnect()
   mapResizeObserver = new ResizeObserver(() => requestMapResize(80))
   mapResizeObserver.observe(mapRef.value)
-
-  mapStageBodyRef.value?.removeEventListener('wheel', handleMapWheel, true)
-  mapStageBodyRef.value?.addEventListener('wheel', handleMapWheel, { passive: false, capture: true })
 
   window.addEventListener('resize', mobileResizeHandler)
 }
@@ -3511,7 +3500,6 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('resize', mobileResizeHandler)
   window.removeEventListener('scroll', handleWindowScroll)
-  mapStageBodyRef.value?.removeEventListener('wheel', handleMapWheel, true)
   mapResizeObserver?.disconnect()
   if (mapResizeTimer) {
     window.clearTimeout(mapResizeTimer)
@@ -3590,13 +3578,20 @@ watch(
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&family=ZCOOL+XiaoWei&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap');
 
 :global(body) {
   margin: 0;
-  font-family: 'ZCOOL XiaoWei', 'Noto Serif SC', serif;
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Noto Serif SC', sans-serif;
   background: #f6ecdf;
   color: #241a13;
+}
+
+:global(button),
+:global(input),
+:global(textarea),
+:global(select) {
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Noto Serif SC', sans-serif;
 }
 
 :global(html) {
@@ -3640,6 +3635,85 @@ watch(
   background: var(--page-background);
   color: var(--text-main);
   transition: background 0.35s ease, color 0.35s ease;
+}
+
+.app-shell.immersive-space {
+  background:
+    radial-gradient(circle at 50% 34%, rgba(82, 130, 235, 0.28), transparent 28%),
+    radial-gradient(circle at 14% 18%, rgba(255, 183, 92, 0.12), transparent 24%),
+    linear-gradient(140deg, #050814 0%, #0a1020 46%, #17101a 100%);
+  color: rgba(255, 244, 224, 0.92);
+}
+
+.app-shell.immersive-space .topbar,
+.app-shell.immersive-space .sidebar,
+.app-shell.immersive-space .detail-panel,
+.app-shell.immersive-space .modal-card,
+.app-shell.immersive-space .theme-panel,
+.app-shell.immersive-space .auth-panel,
+.app-shell.immersive-space .empty-guide-card {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.045)),
+    rgba(8, 13, 24, 0.58);
+  border-color: rgba(255, 244, 224, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 24px 70px rgba(0, 0, 0, 0.36);
+  color: rgba(255, 244, 224, 0.92);
+}
+
+.app-shell.immersive-space .panel-soft,
+.app-shell.immersive-space .panel-strong {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035)),
+    rgba(8, 13, 24, 0.5);
+  border-color: rgba(255, 244, 224, 0.14);
+}
+
+.app-shell.immersive-space .brand-block p,
+.app-shell.immersive-space .stage-subcopy,
+.app-shell.immersive-space .detail-copy p,
+.app-shell.immersive-space .detail-header p,
+.app-shell.immersive-space .detail-empty p,
+.app-shell.immersive-space .timeline-item p,
+.app-shell.immersive-space .memory-item p,
+.app-shell.immersive-space .modal-header p,
+.app-shell.immersive-space .helper-card p,
+.app-shell.immersive-space .stat-card small,
+.app-shell.immersive-space .notice-copy {
+  color: rgba(255, 244, 224, 0.68);
+}
+
+.app-shell.immersive-space .ghost-btn,
+.app-shell.immersive-space .zoom-chip,
+.app-shell.immersive-space .breadcrumb-chip,
+.app-shell.immersive-space .search-input,
+.app-shell.immersive-space .year-select,
+.app-shell.immersive-space .field-control,
+.app-shell.immersive-space .coord-picker,
+.app-shell.immersive-space .helper-card,
+.app-shell.immersive-space .timeline-item,
+.app-shell.immersive-space .memory-list-card,
+.app-shell.immersive-space .filter-card,
+.app-shell.immersive-space .stat-card,
+.app-shell.immersive-space .narrative-card,
+.app-shell.immersive-space .region-card {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 244, 224, 0.13);
+  color: rgba(255, 244, 224, 0.9);
+}
+
+.app-shell.immersive-space .memory-item,
+.app-shell.immersive-space .detail-empty-note,
+.app-shell.immersive-space .empty-line {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 244, 224, 0.82);
+}
+
+.app-shell.immersive-space .memory-item p,
+.app-shell.immersive-space .memory-list-card p,
+.app-shell.immersive-space .detail-empty-note {
+  color: rgba(255, 244, 224, 0.76);
 }
 
 .ambient-layer {
@@ -3725,9 +3799,9 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 14px 20px;
+  padding: 12px 18px;
   border-radius: 28px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   transform-origin: top center;
   transition:
     padding 0.24s ease,
@@ -3784,12 +3858,12 @@ watch(
 .section-heading h3,
 .modal-header h3 {
   margin: 0;
-  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  font-family: 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', serif;
   font-weight: 600;
 }
 
 .brand-block h1 {
-  font-size: clamp(2rem, 3vw, 3rem);
+  font-size: clamp(1.65rem, 2.35vw, 2.45rem);
 }
 
 .brand-block p,
@@ -3812,14 +3886,14 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 8px;
 }
 
 .breadcrumb-chip {
   border: 1px solid var(--panel-border);
   border-radius: 999px;
   background: var(--button-bg);
-  padding: 8px 12px;
+  padding: 6px 11px;
   cursor: pointer;
   color: var(--button-text);
   transition: all 0.2s ease;
@@ -4023,6 +4097,147 @@ watch(
   transform: scale(0.98);
 }
 
+@media (min-width: 769px) {
+  .workspace {
+    height: calc(100vh - 118px);
+    height: calc(100dvh - 118px);
+    min-height: 680px;
+    display: block;
+    overflow: hidden;
+    border-radius: 36px;
+  }
+
+  .workspace.empty-footprints,
+  .workspace.no-selection {
+    display: block;
+  }
+
+  .workspace::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background:
+      linear-gradient(90deg, rgba(21, 13, 7, 0.34), transparent 28%, transparent 70%, rgba(21, 13, 7, 0.3)),
+      linear-gradient(180deg, rgba(21, 13, 7, 0.16), transparent 22%, rgba(21, 13, 7, 0.18));
+    mix-blend-mode: multiply;
+  }
+
+  .map-stage {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    height: auto;
+    min-height: 0;
+    padding: 0;
+    border: none;
+    border-radius: 36px;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .map-stage-header {
+    position: absolute;
+    left: 50%;
+    top: 22px;
+    z-index: 8;
+    width: min(720px, calc(100% - 560px));
+    min-width: 420px;
+    transform: translateX(-50%);
+    padding: 16px 18px;
+    border: 1px solid color-mix(in srgb, var(--map-skin-border) 20%, transparent);
+    border-radius: 28px;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.28)),
+      color-mix(in srgb, var(--panel-soft-bg) 72%, transparent);
+    box-shadow: 0 18px 60px rgba(40, 28, 18, 0.18);
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+  }
+
+  .app-shell.immersive-space .map-stage-header {
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035)),
+      rgba(8, 13, 24, 0.58);
+    border-color: rgba(255, 244, 224, 0.14);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+  }
+
+  .map-stage-body {
+    position: absolute;
+    inset: 0;
+    min-height: 100%;
+    border-radius: 36px;
+    border-color: color-mix(in srgb, var(--map-skin-border) 20%, transparent);
+  }
+
+  .sidebar,
+  .detail-panel {
+    position: absolute;
+    top: 28px;
+    bottom: 28px;
+    z-index: 6;
+    height: auto;
+    width: min(360px, 29vw);
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.32)),
+      color-mix(in srgb, var(--panel-strong-bg) 70%, transparent);
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.38),
+      0 22px 72px rgba(44, 30, 17, 0.2);
+    backdrop-filter: blur(24px) saturate(1.14);
+    -webkit-backdrop-filter: blur(24px) saturate(1.14);
+    transition:
+      opacity 0.28s ease,
+      transform 0.28s ease,
+      border-color 0.28s ease,
+      background 0.28s ease;
+  }
+
+  .sidebar {
+    left: 28px;
+  }
+
+  .detail-panel {
+    right: 28px;
+  }
+
+  .workspace.no-selection .detail-panel {
+    opacity: 0.82;
+    transform: none;
+  }
+
+  .workspace.empty-footprints .sidebar {
+    display: none;
+  }
+
+  .workspace.empty-footprints .detail-panel {
+    width: min(420px, 34vw);
+  }
+
+  .workspace.panels-collapsed .sidebar,
+  .workspace.panels-collapsed .detail-panel {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .workspace.panels-collapsed .sidebar {
+    transform: translateX(-24px) scale(0.96);
+  }
+
+  .workspace.panels-collapsed .detail-panel {
+    transform: translateX(24px) scale(0.96);
+  }
+
+  .workspace.panels-collapsed .map-stage-header {
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -16px) scale(0.96);
+  }
+}
+
 .sidebar,
 .detail-panel {
   min-height: 0;
@@ -4095,7 +4310,7 @@ watch(
 .stat-card strong {
   display: block;
   margin: 8px 0 6px;
-  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  font-family: 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', serif;
   font-size: 2rem;
 }
 
@@ -4140,7 +4355,7 @@ watch(
 
 .region-metrics strong {
   display: block;
-  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  font-family: 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', serif;
   font-size: 1.55rem;
 }
 
@@ -4510,11 +4725,15 @@ watch(
   flex-shrink: 0;
 }
 
+.map-stage-header h2 {
+  font-size: clamp(1.55rem, 2vw, 2.15rem);
+}
+
 .stage-subcopy {
   max-width: 42rem;
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--text-muted);
-  line-height: 1.55;
+  line-height: 1.45;
 }
 
 .map-stage-body {
@@ -4531,6 +4750,7 @@ watch(
     inset 0 -38px 90px rgba(20, 12, 6, 0.16),
     0 22px 58px color-mix(in srgb, var(--dark) 20%, transparent);
   cursor: grab;
+  touch-action: none;
 }
 
 .map-stage-body:active {
@@ -4601,12 +4821,29 @@ watch(
 .map-stage-body.space-view::before {
   opacity: 0.9;
   background-image:
-    radial-gradient(circle, rgba(255, 255, 255, 0.9) 0 1px, transparent 1.6px),
-    radial-gradient(circle, rgba(255, 226, 170, 0.65) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 6% 17%, rgba(255, 255, 255, 0.86) 0 1.1px, transparent 1.8px),
+    radial-gradient(circle at 11% 74%, rgba(255, 235, 190, 0.72) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 18% 43%, rgba(194, 221, 255, 0.68) 0 0.9px, transparent 1.5px),
+    radial-gradient(circle at 27% 12%, rgba(255, 255, 255, 0.76) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 31% 68%, rgba(255, 241, 208, 0.58) 0 1.2px, transparent 2px),
+    radial-gradient(circle at 39% 28%, rgba(220, 236, 255, 0.8) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 46% 83%, rgba(255, 255, 255, 0.7) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 52% 18%, rgba(255, 224, 172, 0.64) 0 0.9px, transparent 1.5px),
+    radial-gradient(circle at 58% 58%, rgba(255, 255, 255, 0.84) 0 1.1px, transparent 1.9px),
+    radial-gradient(circle at 64% 8%, rgba(196, 222, 255, 0.66) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 69% 36%, rgba(255, 255, 255, 0.72) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 76% 77%, rgba(255, 232, 186, 0.68) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 82% 22%, rgba(219, 237, 255, 0.74) 0 0.9px, transparent 1.6px),
+    radial-gradient(circle at 88% 61%, rgba(255, 255, 255, 0.82) 0 1.1px, transparent 1.9px),
+    radial-gradient(circle at 94% 33%, rgba(255, 240, 210, 0.62) 0 0.9px, transparent 1.6px),
+    radial-gradient(circle at 9% 91%, rgba(180, 212, 255, 0.58) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 21% 82%, rgba(255, 255, 255, 0.48) 0 0.8px, transparent 1.4px),
+    radial-gradient(circle at 73% 49%, rgba(255, 255, 255, 0.5) 0 0.8px, transparent 1.5px),
+    radial-gradient(circle at 92% 88%, rgba(255, 226, 174, 0.58) 0 0.9px, transparent 1.6px),
     radial-gradient(circle at 72% 30%, rgba(94, 157, 255, 0.26), transparent 18%),
     radial-gradient(circle at 24% 66%, rgba(255, 138, 69, 0.12), transparent 22%),
     linear-gradient(120deg, transparent 0 40%, rgba(255, 255, 255, 0.08) 50%, transparent 60%);
-  background-size: 118px 118px, 176px 176px, 100% 100%, 100% 100%, 100% 100%;
+  background-size: auto;
   mask-image: none;
 }
 
@@ -4705,6 +4942,7 @@ watch(
   width: 100%;
   height: 100%;
   min-height: 100%;
+  touch-action: none;
   transform: translateZ(0);
   filter: drop-shadow(0 20px 32px color-mix(in srgb, var(--map-skin-glow) 46%, transparent));
   transition: filter 0.25s ease, transform 0.25s ease;
@@ -4714,6 +4952,43 @@ watch(
   opacity: 0.12;
   filter: blur(2px) saturate(0.78);
   pointer-events: none;
+}
+
+.map-texture-loader {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  color: rgba(255, 244, 220, 0.92);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(91, 144, 255, 0.12), transparent 23%),
+    radial-gradient(circle at center, transparent 0 34%, rgba(4, 8, 18, 0.1) 44%, rgba(4, 8, 18, 0.45) 76%);
+  text-align: center;
+}
+
+.map-texture-loader strong {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.08rem;
+  letter-spacing: 0.02em;
+}
+
+.map-texture-loader small {
+  color: rgba(255, 244, 220, 0.68);
+}
+
+.texture-orbit {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 244, 220, 0.28);
+  border-top-color: rgba(255, 244, 220, 0.9);
+  box-shadow: 0 0 34px rgba(91, 144, 255, 0.28);
+  animation: spin 1.1s linear infinite;
 }
 
 .picked-location-marker {
@@ -4942,6 +5217,47 @@ watch(
   backdrop-filter: blur(18px);
   color: var(--map-skin-label);
   box-shadow: 0 18px 42px rgba(36, 26, 19, 0.13), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transition: min-width 0.2s ease, padding 0.2s ease, border-radius 0.2s ease;
+}
+
+.legend-card.collapsed {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 999px;
+}
+
+.legend-card.collapsed > .legend-title,
+.legend-card.collapsed .legend-row {
+  display: none;
+}
+
+.legend-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.legend-toggle span:last-child {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--map-skin-border) 14%, transparent);
+  color: color-mix(in srgb, var(--map-skin-label) 82%, transparent);
+  font-size: 0.72rem;
+}
+
+.legend-title-clean {
+  color: var(--map-skin-label);
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 .legend-title {
@@ -5031,7 +5347,7 @@ watch(
   padding: 10px 12px;
   border-radius: 999px;
   text-align: center;
-  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  font-family: 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', serif;
   font-size: 1.25rem;
   color: #fff8ef;
   background: linear-gradient(135deg, #2f2116, #8f5c2e);
@@ -5203,6 +5519,10 @@ watch(
   justify-content: center;
 }
 
+.detail-empty-actions .primary-btn[disabled] {
+  display: none;
+}
+
 .detail-empty-note {
   color: var(--text-muted);
   line-height: 1.6;
@@ -5270,8 +5590,11 @@ watch(
   position: fixed;
   inset: 0;
   z-index: 300;
-  background: rgba(28, 18, 12, 0.34);
-  backdrop-filter: blur(12px);
+  background:
+    radial-gradient(circle at 50% 28%, rgba(255, 229, 183, 0.14), transparent 30%),
+    rgba(20, 12, 8, 0.42);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5286,6 +5609,13 @@ watch(
   overflow: auto;
   padding: 28px;
   border-radius: 28px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.84), rgba(255, 250, 241, 0.62)),
+    color-mix(in srgb, var(--panel-strong-bg) 82%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.48);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 34px 90px rgba(38, 23, 12, 0.26);
 }
 
 .theme-panel,
@@ -5298,6 +5628,10 @@ watch(
   text-align: center;
 }
 
+.modal-header h3 {
+  font-size: clamp(1.65rem, 2.4vw, 2.35rem);
+}
+
 .form-intro-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5308,7 +5642,9 @@ watch(
 .helper-card {
   padding: 16px;
   border-radius: 20px;
-  background: color-mix(in srgb, var(--button-bg) 72%, transparent);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.18)),
+    color-mix(in srgb, var(--button-bg) 72%, transparent);
   border: 1px solid var(--panel-border);
 }
 
@@ -5328,6 +5664,28 @@ watch(
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 18px;
+}
+
+.field-control,
+.field-block textarea,
+.field-block input,
+.field-block select {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.46)),
+    color-mix(in srgb, var(--button-bg) 74%, transparent);
+  border-color: color-mix(in srgb, var(--panel-border) 66%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
+}
+
+.field-control:focus,
+.field-block textarea:focus,
+.field-block input:focus,
+.field-block select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.46);
 }
 
 /* 坐标选点 */
@@ -5771,8 +6129,32 @@ watch(
 
 @media (max-width: 768px) {
   .app-shell {
-    padding: 16px;
-    padding-bottom: 112px;
+    padding: 12px;
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+
+  .focus-toggle-btn {
+    display: none;
+  }
+
+  .topbar {
+    top: 8px;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 24px;
+  }
+
+  .brand-line {
+    gap: 8px;
+  }
+
+  .brand-block h1 {
+    font-size: clamp(1.45rem, 8vw, 2rem);
+  }
+
+  .brand-block p,
+  .breadcrumb-bar {
+    display: none;
   }
 
   .system-notice {
@@ -5792,11 +6174,13 @@ watch(
   }
 
   .map-stage {
-    min-height: calc(100dvh - 136px);
+    min-height: calc(100dvh - 168px);
+    padding: 10px;
   }
 
   .map-stage-body {
-    min-height: clamp(420px, calc(100dvh - 285px), 560px);
+    min-height: clamp(430px, calc(100dvh - 300px), 620px);
+    border-radius: 22px;
   }
 
   .topbar,
@@ -6016,10 +6400,13 @@ watch(
   z-index: 200;
   display: flex;
   justify-content: space-around;
-  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--panel-strong-bg) 94%, transparent);
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06)),
+    color-mix(in srgb, var(--panel-strong-bg) 88%, transparent);
   border-top: 1px solid var(--panel-border);
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
 }
 
 .nav-item {
@@ -6086,6 +6473,41 @@ watch(
 
 .workspace.mobile-mode .detail-panel {
   min-height: 200px;
+}
+
+@media (max-width: 768px) {
+  .workspace.mobile-mode {
+    min-height: calc(100dvh - 132px);
+    padding-bottom: 8px;
+  }
+
+  .workspace.mobile-mode .map-stage {
+    min-height: calc(100dvh - 166px);
+    padding: 10px;
+  }
+
+  .workspace.mobile-mode .map-stage-body {
+    min-height: clamp(430px, calc(100dvh - 300px), 620px);
+  }
+
+  .workspace.mobile-mode .sidebar,
+  .workspace.mobile-mode .detail-panel {
+    border-radius: 24px;
+  }
+
+  .mobile-nav {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    border: 1px solid var(--panel-border);
+    border-radius: 24px;
+    box-shadow: 0 18px 50px color-mix(in srgb, var(--dark) 24%, transparent);
+  }
+
+  .nav-item {
+    flex: 1 1 0;
+    padding: 8px 6px;
+  }
 }
 
 /* 旅程时间线卡片 */
@@ -6316,5 +6738,114 @@ watch(
 
 .journey-detail-actions .danger-btn {
   width: auto;
+}
+
+@media (min-width: 769px) {
+  .workspace {
+    display: block;
+    height: calc(100vh - 118px);
+    height: calc(100dvh - 118px);
+    min-height: 680px;
+    grid-template-columns: none;
+  }
+
+  .workspace.mobile-mode {
+    display: grid;
+    height: auto;
+    min-height: calc(100vh - 140px);
+  }
+
+  .sidebar,
+  .detail-panel {
+    position: absolute;
+    top: 28px;
+    bottom: 28px;
+    height: auto;
+  }
+
+  .sidebar {
+    left: 28px;
+    width: min(360px, 29vw);
+  }
+
+  .detail-panel {
+    right: 28px;
+    width: min(360px, 29vw);
+  }
+
+  .workspace.mobile-mode .map-stage {
+    position: relative;
+    inset: auto;
+    min-height: min(420px, calc(100dvh - 180px));
+    padding: 14px;
+  }
+
+  .workspace.mobile-mode .map-stage-header,
+  .workspace.mobile-mode .sidebar,
+  .workspace.mobile-mode .detail-panel {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    transform: none;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1100px) {
+  .workspace {
+    min-height: 660px;
+  }
+
+  .map-stage-header {
+    left: 24px;
+    top: 24px;
+    width: min(360px, calc(100% - 380px));
+    min-width: 300px;
+    transform: none;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .map-stage-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .stage-mode-group,
+  .map-zoom-cluster {
+    flex: 1 1 auto;
+  }
+
+  .map-stage-header {
+    gap: 10px;
+    padding: 0;
+    margin-bottom: 8px;
+  }
+
+  .map-stage-header h2 {
+    font-size: clamp(1.35rem, 6vw, 1.75rem);
+  }
+
+  .stage-subcopy {
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+
+  .sidebar {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-18px) scale(0.96);
+  }
+
+  .detail-panel {
+    top: 28px;
+    right: 28px;
+    bottom: 28px;
+    width: 316px;
+    transform: none;
+  }
+
+  .workspace.empty-footprints .detail-panel {
+    width: 316px;
+  }
 }
 </style>
