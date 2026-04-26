@@ -27,6 +27,47 @@ function firstAddressValue(address, keys) {
   return '';
 }
 
+function mapBigDataCloudAddress(data = {}) {
+  const administrative = data.localityInfo?.administrative || [];
+  const city = data.city || data.locality || administrative.find(item => item.adminLevel === 8)?.name || data.principalSubdivision || '';
+  const district = administrative.find(item => item.adminLevel >= 9)?.name || data.locality || '';
+
+  return {
+    country: data.countryName || '',
+    country_code: data.countryCode || '',
+    province: data.principalSubdivision || data.countryName || '',
+    city,
+    district,
+    name: data.locality || city || data.principalSubdivision || '地图选点',
+    address: [data.locality, data.principalSubdivision, data.countryName].filter(Boolean).join(', ')
+  };
+}
+
+function buildReverseGeocodePayload(rawLocation, lat, lng) {
+  const provinces = db.prepare('SELECT id, name, adcode FROM provinces').all();
+  const matchedProvince = provinces.find((province) => {
+    const source = normalizeRegionName(rawLocation.province);
+    const target = normalizeRegionName(province.name);
+    return source && (source === target || source.includes(target) || target.includes(source));
+  });
+
+  return {
+    country: rawLocation.country || '',
+    country_code: String(rawLocation.country_code || '').toUpperCase(),
+    province: matchedProvince?.name || rawLocation.province || rawLocation.country || '',
+    province_id: matchedProvince?.id || null,
+    province_adcode: matchedProvince?.adcode || '',
+    city: normalizeRegionName(rawLocation.city || rawLocation.name),
+    city_adcode: '',
+    district: normalizeRegionName(rawLocation.district || ''),
+    district_adcode: '',
+    name: normalizeRegionName(rawLocation.name || rawLocation.city || '地图选点'),
+    address: rawLocation.address || '',
+    latitude: lat,
+    longitude: lng
+  };
+}
+
 // 获取所有省份和城市数据（公开）
 router.get('/', (req, res) => {
   const provinces = db.prepare('SELECT id, name, code, adcode, center_lon, center_lat, visited_at, notes FROM provinces').all();
@@ -167,10 +208,9 @@ router.get('/reverse-geocode', async (req, res) => {
     return res.status(400).json({ error: 'invalid coordinates' });
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
     const url = new URL('https://nominatim.openstreetmap.org/reverse');
     url.searchParams.set('format', 'jsonv2');
     url.searchParams.set('lat', String(lat));
@@ -186,46 +226,46 @@ router.get('/reverse-geocode', async (req, res) => {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
       }
     });
+    clearTimeout(timeout);
 
-    if (!response.ok) {
+    if (response.ok) {
+      const data = await response.json();
+      const address = data.address || {};
+      const provinceRaw = firstAddressValue(address, ['state', 'province', 'region']);
+      const cityRaw = firstAddressValue(address, ['city', 'town', 'municipality', 'village', 'county']);
+      const districtRaw = firstAddressValue(address, ['city_district', 'district', 'county', 'borough', 'suburb', 'neighbourhood', 'quarter']);
+      const detailRaw = firstAddressValue(address, ['road', 'pedestrian', 'footway', 'residential', 'amenity', 'tourism', 'building']);
+      const placeName = detailRaw || districtRaw || cityRaw || data.name || data.display_name || '地图选点';
+
+      return res.json(buildReverseGeocodePayload({
+        country: address.country || '',
+        country_code: address.country_code || '',
+        province: provinceRaw || address.country || '',
+        city: cityRaw || placeName,
+        district: districtRaw || detailRaw,
+        name: placeName,
+        address: data.display_name || ''
+      }, lat, lng));
+    }
+  } catch (error) {
+    // Continue to the fallback provider below.
+  }
+
+  try {
+    const fallbackUrl = new URL('https://api.bigdatacloud.net/data/reverse-geocode-client');
+    fallbackUrl.searchParams.set('latitude', String(lat));
+    fallbackUrl.searchParams.set('longitude', String(lng));
+    fallbackUrl.searchParams.set('localityLanguage', 'zh');
+
+    const fallbackResponse = await fetch(fallbackUrl);
+    if (!fallbackResponse.ok) {
       return res.status(502).json({ error: 'reverse geocode failed' });
     }
 
-    const data = await response.json();
-    const address = data.address || {};
-    const countryCode = String(address.country_code || '').toUpperCase();
-    const provinceRaw = firstAddressValue(address, ['state', 'province', 'region']);
-    const cityRaw = firstAddressValue(address, ['city', 'town', 'municipality', 'village', 'county']);
-    const districtRaw = firstAddressValue(address, ['city_district', 'district', 'county', 'borough', 'suburb', 'neighbourhood', 'quarter']);
-    const detailRaw = firstAddressValue(address, ['road', 'pedestrian', 'footway', 'residential', 'amenity', 'tourism', 'building']);
-    const placeName = detailRaw || districtRaw || cityRaw || data.name || data.display_name || '地图选点';
-
-    const provinces = db.prepare('SELECT id, name, adcode FROM provinces').all();
-    const matchedProvince = provinces.find((province) => {
-      const source = normalizeRegionName(provinceRaw);
-      const target = normalizeRegionName(province.name);
-      return source && (source === target || source.includes(target) || target.includes(source));
-    });
-
-    res.json({
-      country: address.country || '',
-      country_code: countryCode,
-      province: matchedProvince?.name || provinceRaw || address.country || '',
-      province_id: matchedProvince?.id || null,
-      province_adcode: matchedProvince?.adcode || '',
-      city: normalizeRegionName(cityRaw || placeName),
-      city_adcode: '',
-      district: normalizeRegionName(districtRaw || detailRaw),
-      district_adcode: '',
-      name: normalizeRegionName(placeName),
-      address: data.display_name || '',
-      latitude: lat,
-      longitude: lng
-    });
+    const fallbackData = await fallbackResponse.json();
+    return res.json(buildReverseGeocodePayload(mapBigDataCloudAddress(fallbackData), lat, lng));
   } catch (error) {
     res.status(502).json({ error: 'reverse geocode failed' });
-  } finally {
-    clearTimeout(timeout);
   }
 });
 

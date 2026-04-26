@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell" :style="appStyle">
+  <div ref="appShellRef" class="app-shell" :style="appStyle">
     <div class="ambient-layer">
       <div class="gradient-orb orb-1"></div>
       <div class="gradient-orb orb-2"></div>
@@ -28,7 +28,7 @@
       </button>
     </nav>
 
-    <header class="topbar panel panel-soft" :class="{ 'mobile-compact': isMobile }">
+    <header class="topbar panel panel-soft" :class="{ 'mobile-compact': isMobile, condensed: topbarCondensed }">
       <div class="brand-block">
         <span class="eyebrow">Journey Archive</span>
         <div class="brand-line">
@@ -281,7 +281,7 @@
         <div
           ref="mapStageBodyRef"
           class="map-stage-body"
-          :class="[`skin-${activeMapSkin}`, { transitioning: mapTransitioning, 'timeline-mode': viewMode === 'timeline' }]"
+          :class="[`skin-${activeMapSkin}`, { transitioning: mapTransitioning, 'timeline-mode': viewMode === 'timeline', 'space-view': isGlobeSpaceView }]"
           :style="mapStageStyle"
         >
           <!-- 地图选点提示（编辑模式下显示） -->
@@ -562,29 +562,27 @@
             <label class="field-block">
               <span>城市 / 地点</span>
               <input
-                v-if="formData.city_name"
                 v-model="formData.city_name"
                 class="field-control"
-                readonly
+                list="city-options"
+                placeholder="输入地点，或选择城市"
               />
-              <select v-else v-model="formData.city_name" class="field-control">
-                <option value="">选择城市或在地图选点</option>
+              <datalist id="city-options">
                 <option v-for="city in availableCities" :key="city.value" :value="city.value">{{ city.label }}</option>
-              </select>
+              </datalist>
             </label>
 
             <label v-if="currentCityArea" class="field-block">
               <span>区县</span>
               <input
-                v-if="formData.district_name"
                 v-model="formData.district_name"
                 class="field-control"
-                readonly
+                list="district-options"
+                placeholder="输入区县、街区或地点"
               />
-              <select v-else v-model="formData.district_name" class="field-control">
-                <option value="">选择区县</option>
+              <datalist id="district-options">
                 <option v-for="district in availableDistricts" :key="district.value" :value="district.value">{{ district.label }}</option>
-              </select>
+              </datalist>
             </label>
 
             <label class="field-block">
@@ -1013,6 +1011,7 @@ import { usePlacesStore } from './stores/places'
 const placesStore = usePlacesStore()
 const editMode = useEditStore()
 
+const appShellRef = ref(null)
 const mapRef = ref(null)
 const mapStageBodyRef = ref(null)
 const addUploadInput = ref(null)
@@ -1022,7 +1021,8 @@ const pickMarker = ref(null) // 选点标记
 const isResolvingPickedLocation = ref(false)
 const DEFAULT_GLOBE_CENTER = [104, 24]
 const DEFAULT_GLOBE_ZOOM = 1.2
-const MOBILE_GLOBE_ZOOM = 0.82
+const MOBILE_GLOBE_ZOOM = 1.12
+const SPACE_VIEW_MAX_ZOOM = 2.6
 let mapInstance = null
 let maplibreGlModule = null
 let provinceLabelMarkers = []
@@ -1046,6 +1046,7 @@ const loadingText = ref('加载中...')
 // Toast 提示系统
 const toastMessage = ref('')
 const toastType = ref('info')
+const topbarCondensed = ref(false)
 let toastTimer = null
 
 function showToast(message, type = 'success', duration = 3000) {
@@ -1055,6 +1056,14 @@ function showToast(message, type = 'success', duration = 3000) {
   toastTimer = setTimeout(() => {
     toastMessage.value = ''
   }, duration)
+}
+
+function updateTopbarCondensed() {
+  topbarCondensed.value = window.scrollY > (isMobile.value ? 70 : 120)
+}
+
+function handleWindowScroll() {
+  updateTopbarCondensed()
 }
 const editingFootprint = ref(null)
 const activeFilter = ref('all')
@@ -1067,6 +1076,7 @@ const viewMode = ref('map')
 const activeMapSkin = ref(localStorage.getItem('mapSkin') || 'warm')
 const emptyGuideDismissed = ref(localStorage.getItem('emptyGuideDismissed') !== '0')
 const mapOverlayCollapsed = ref(true)
+const mapZoomLevel = ref(DEFAULT_GLOBE_ZOOM)
 
 // 手机端适配
 const MOBILE_BREAKPOINT = 768
@@ -1077,6 +1087,7 @@ const checkMobile = () => {
 }
 const mobileResizeHandler = () => {
   checkMobile()
+  updateTopbarCondensed()
   requestMapResize()
 }
 
@@ -1085,7 +1096,6 @@ const currentCityArea = ref(null)
 const provinceGeoCache = ref({})
 const districtGeoCache = ref({})
 const chinaGeoCache = ref(null)
-const chinaCentersCache = ref(null) // 轻量的省份中心点数据
 const chinaBoundaryLoaded = ref(false) // 标记完整边界是否已加载
 const hoverLabel = ref(null)
 const tooltipPosition = ref({ x: 0, y: 0 })
@@ -1301,6 +1311,10 @@ const mapStageStyle = computed(() => ({
   '--map-skin-glow': activeMapSkinConfig.value.glow,
 }))
 
+const isGlobeSpaceView = computed(
+  () => viewMode.value === 'map' && !currentProvince.value && !currentCityArea.value && mapZoomLevel.value <= SPACE_VIEW_MAX_ZOOM,
+)
+
 // ========== 地图选点功能 ==========
 
 function startPickingLocation() {
@@ -1337,14 +1351,15 @@ function getFallbackLocationFromMap(point) {
   const layers = ['district-fill', 'province-fill', 'china-fill'].filter((layer) => mapInstance.getLayer(layer))
   const features = layers.length ? mapInstance.queryRenderedFeatures(point, { layers }) : []
   const districtFeature = features.find((feature) => feature.layer?.id === 'district-fill')
-  const provinceFeature = features.find((feature) => feature.layer?.id === 'province-fill' || feature.layer?.id === 'china-fill')
+  const cityFeature = features.find((feature) => feature.layer?.id === 'province-fill')
+  const provinceFeature = features.find((feature) => feature.layer?.id === 'china-fill')
 
   return {
     province: currentProvince.value?.name || provinceFeature?.properties?.name || '',
-    city: currentCityArea.value?.name || '',
+    city: currentCityArea.value?.name || cityFeature?.properties?.name || '',
     district: districtFeature?.properties?.name || '',
     provinceAdcode: currentProvince.value?.adcode || provinceFeature?.properties?.adcode || '',
-    cityAdcode: currentCityArea.value?.adcode || '',
+    cityAdcode: currentCityArea.value?.adcode || cityFeature?.properties?.adcode || '',
     districtAdcode: districtFeature?.properties?.adcode || '',
   }
 }
@@ -1387,7 +1402,10 @@ async function handleMapClickForLocation(e) {
     if (pickMarker.value) {
       pickMarker.value.remove()
     }
-    pickMarker.value = new maplibreGlModule.Marker(buildPickedLocationMarker())
+    pickMarker.value = new maplibreGlModule.Marker({
+      element: buildPickedLocationMarker(),
+      anchor: 'bottom',
+    })
       .setLngLat([lng, lat])
       .addTo(mapInstance)
   }
@@ -1400,7 +1418,10 @@ async function handleMapClickForLocation(e) {
     const { data } = await reverseGeocode(lat, lng)
     applyPickedLocation(lng, lat, { ...data, fallback })
   } catch (error) {
-    showToast('已记录坐标，地址识别暂时失败，可手动补充城市', 'error', 3600)
+    const hasFallback = Boolean(formData.value.city_name || formData.value.district_name || formData.value.province_name)
+    if (!hasFallback) {
+      showToast('已记录坐标，可以直接输入城市或地点名称', 'info', 3200)
+    }
   } finally {
     isResolvingPickedLocation.value = false
   }
@@ -1686,6 +1707,11 @@ const filteredCities = computed(() => {
         city.name,
         city.district_name,
         city.province_name,
+        cityLabel(city),
+        detailLocationText(city),
+        city.city_adcode,
+        city.district_adcode,
+        city.province_adcode,
         city.description,
         city.tags,
       ]
@@ -2211,6 +2237,10 @@ function getCurrentMapZoom() {
   return mapInstance?.getZoom() || getDefaultMapZoom()
 }
 
+function syncMapZoomLevel() {
+  mapZoomLevel.value = getCurrentMapZoom()
+}
+
 function clampMapZoom(zoom) {
   return Math.min(Math.max(zoom, getMinMapZoom()), 18)
 }
@@ -2247,11 +2277,15 @@ function handleMapWheel(event) {
   const around = mapInstance.unproject(point)
   const currentZoom = mapInstance.getZoom()
   const delta = event.deltaY < 0 ? 0.45 : -0.45
-  mapInstance.zoomTo(clampMapZoom(currentZoom + delta), {
-    around,
+  const nextZoom = clampMapZoom(currentZoom + delta)
+  const options = {
     duration: 170,
     easing: (t) => 1 - Math.pow(1 - t, 3),
-  })
+  }
+  if (currentZoom >= 5) {
+    options.around = around
+  }
+  mapInstance.zoomTo(nextZoom, options)
   globeAutoRotate = false
 }
 
@@ -2371,11 +2405,6 @@ function backToChina() {
   // 移除省级和区县级边界图层
   removeBoundaryLayers()
   globeAutoRotate = true
-
-  // 重新显示省份标注
-  if (chinaCentersCache.value) {
-    createProvinceLabelsFromCenters(chinaCentersCache.value)
-  }
 
   // 飞回全球视角
   mapInstance.flyTo({
@@ -3015,55 +3044,6 @@ function clearProvinceLabelMarkers() {
   provinceLabelMarkers = []
 }
 
-// 从轻量中心点数据创建省份标注（快速显示）
-function createProvinceLabelsFromCenters(provinces) {
-  if (!mapInstance || !maplibreGlModule) return
-
-  clearProvinceLabelMarkers()
-  const skin = activeMapSkinConfig.value
-
-  provinces.forEach(p => {
-    const name = normalizeRegionName(p.name)
-    if (!name || !p.center) return
-
-    const el = document.createElement('div')
-    el.className = 'province-label-marker'
-    el.textContent = name
-    el.style.cssText = `
-      color: ${skin.label};
-      font-size: 11px;
-      font-weight: 500;
-      background: ${getLabelHaloColor(activeMapSkin.value)};
-      padding: 2px 6px;
-      border-radius: 3px;
-      white-space: nowrap;
-      pointer-events: auto;
-      cursor: pointer;
-      opacity: 0.85;
-    `
-
-    const marker = new maplibreGlModule.Marker(el)
-      .setLngLat(p.center)
-      .addTo(mapInstance)
-
-    // 点击标注进入省份
-    el.addEventListener('click', async (e) => {
-      e.stopPropagation()
-      const province = getProvinceByName(name)
-      if (province) {
-        globeAutoRotate = false
-        // 先加载完整边界再进入省份
-        if (!chinaBoundaryLoaded.value) {
-          await loadFullChinaBoundary()
-        }
-        await loadProvinceMap(province)
-      }
-    })
-
-    provinceLabelMarkers.push(marker)
-  })
-}
-
 // 加载完整的中国边界数据（582KB，按需加载）
 async function loadFullChinaBoundary() {
   if (chinaBoundaryLoaded.value) return
@@ -3086,12 +3066,11 @@ async function loadFullChinaBoundary() {
 function updateMapView() {
   if (!mapInstance) return
 
-  // 清除旧的标注（会在 style 更新后重新创建）
+  // 清除旧的 DOM 标注，省份名称不再使用浮层小卡片显示。
   clearProvinceLabelMarkers()
 
   mapInstance.setStyle(buildMaplibreStyle())
 
-  // style 更新后重新创建标注
   mapInstance.once('style.load', () => {
     // 重新设置边界数据
     if (chinaGeoCache.value) {
@@ -3102,11 +3081,6 @@ function updateMapView() {
     }
     if (currentCityArea.value && districtGeoCache.value[currentCityArea.value.adcode]) {
       updateDistrictBoundaryLayer(districtGeoCache.value[currentCityArea.value.adcode])
-    }
-
-    // 重新创建省份标注（使用新主题颜色）
-    if (chinaCentersCache.value && !currentProvince.value && !currentCityArea.value) {
-      createProvinceLabelsFromCenters(chinaCentersCache.value)
     }
 
     updateFootprintMarkers()
@@ -3148,6 +3122,7 @@ async function initMap() {
     pixelRatio: Math.min(window.devicePixelRatio, 1.5), // 限制像素比，减少渲染开销
     crossSourceCollisions: false, // 禁用跨源碰撞检测
   })
+  syncMapZoomLevel()
 
   // 添加导航控件
   mapInstance.addControl(new maplibreGl.NavigationControl({ showCompass: false }), 'bottom-right')
@@ -3167,19 +3142,6 @@ async function initMap() {
     mapInstance.on('touchstart', () => {
       globeAutoRotate = false
     })
-
-    // 加载轻量的省份中心点数据（2.8KB，快速显示标注）
-    try {
-      const response = await fetch('/china_centers.json')
-      if (response.ok) {
-        const data = await response.json()
-        chinaCentersCache.value = data.provinces
-        // 立即显示省份标注（无需边界数据）
-        createProvinceLabelsFromCenters(data.provinces)
-      }
-    } catch (err) {
-      console.warn('加载省份中心数据失败:', err)
-    }
 
     // 监听缩放事件，放大时加载完整边界
     mapInstance.on('zoomend', () => {
@@ -3274,11 +3236,14 @@ async function initMap() {
 
   // 监听缩放变化，切换 globe/mercator 投影
   mapInstance.on('zoom', () => {
+    syncMapZoomLevel()
     const zoom = mapInstance.getZoom()
     if (zoom > 5 && mapInstance.getProjection().type === 'globe') {
       // 放大到一定程度时可以考虑切换到 mercator（可选）
     }
   })
+
+  mapInstance.on('moveend', syncMapZoomLevel)
 
   // Resize 监听
   mapResizeObserver?.disconnect()
@@ -3464,6 +3429,8 @@ async function confirmDeleteJourney(id) {
 
 onMounted(async () => {
   editMode.checkEditMode()
+  updateTopbarCondensed()
+  window.addEventListener('scroll', handleWindowScroll, { passive: true })
   isLoading.value = true
   loadingText.value = '初始化页面...'
 
@@ -3486,6 +3453,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', mobileResizeHandler)
+  window.removeEventListener('scroll', handleWindowScroll)
   mapStageBodyRef.value?.removeEventListener('wheel', handleMapWheel, true)
   mapResizeObserver?.disconnect()
   if (mapResizeTimer) {
@@ -3693,6 +3661,9 @@ watch(
 }
 
 .topbar {
+  position: sticky;
+  top: 14px;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3700,6 +3671,52 @@ watch(
   padding: 24px 28px;
   border-radius: 28px;
   margin-bottom: 24px;
+  transform-origin: top center;
+  transition:
+    padding 0.24s ease,
+    border-radius 0.24s ease,
+    box-shadow 0.24s ease,
+    transform 0.24s ease,
+    background 0.24s ease;
+}
+
+.topbar.condensed {
+  padding: 12px 18px;
+  border-radius: 999px;
+  box-shadow: 0 16px 46px color-mix(in srgb, var(--dark) 18%, transparent);
+}
+
+.topbar.condensed .brand-block {
+  min-width: 0;
+}
+
+.topbar.condensed .eyebrow,
+.topbar.condensed .brand-block p,
+.topbar.condensed .breadcrumb-bar {
+  display: none;
+}
+
+.topbar.condensed .brand-block h1 {
+  max-width: min(42vw, 520px);
+  overflow: hidden;
+  font-size: clamp(1.15rem, 1.8vw, 1.45rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar.condensed .brand-line {
+  align-items: center;
+}
+
+.topbar.condensed .topbar-actions {
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.topbar.condensed .ghost-btn,
+.topbar.condensed .primary-btn {
+  padding: 8px 12px;
+  font-size: 0.86rem;
 }
 
 .brand-block h1,
@@ -4378,6 +4395,72 @@ watch(
 
 .map-stage-body.skin-night {
   --map-panel-bg: rgba(8, 13, 22, 0.9);
+}
+
+.map-stage-body.space-view {
+  background:
+    radial-gradient(circle at 50% 52%, rgba(91, 144, 255, 0.2), transparent 22%),
+    radial-gradient(circle at 18% 18%, rgba(255, 205, 134, 0.16), transparent 18%),
+    radial-gradient(circle at 82% 22%, rgba(112, 183, 255, 0.12), transparent 20%),
+    radial-gradient(circle at 70% 84%, rgba(255, 138, 69, 0.1), transparent 24%),
+    linear-gradient(145deg, #040812 0%, #0b1424 48%, #150d1f 100%);
+  border-color: rgba(180, 207, 255, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 -46px 120px rgba(0, 0, 0, 0.45),
+    0 26px 70px rgba(4, 8, 18, 0.38);
+}
+
+.map-stage-body.space-view::before {
+  opacity: 0.9;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.9) 0 1px, transparent 1.6px),
+    radial-gradient(circle, rgba(255, 226, 170, 0.65) 0 1px, transparent 1.7px),
+    radial-gradient(circle at 72% 30%, rgba(94, 157, 255, 0.26), transparent 18%),
+    radial-gradient(circle at 24% 66%, rgba(255, 138, 69, 0.12), transparent 22%),
+    linear-gradient(120deg, transparent 0 40%, rgba(255, 255, 255, 0.08) 50%, transparent 60%);
+  background-size: 118px 118px, 176px 176px, 100% 100%, 100% 100%, 100% 100%;
+  mask-image: none;
+}
+
+.map-stage-body.space-view::after {
+  opacity: 0.8;
+  background:
+    radial-gradient(circle at 50% 52%, transparent 0 28%, rgba(44, 101, 184, 0.18) 45%, transparent 62%),
+    radial-gradient(ellipse at 50% 54%, transparent 0 42%, rgba(255, 255, 255, 0.18) 56%, transparent 64%),
+    radial-gradient(circle at 78% 16%, rgba(255, 228, 168, 0.18), transparent 20%);
+  mix-blend-mode: screen;
+}
+
+.map-stage-body.space-view .maplibre-container {
+  filter:
+    drop-shadow(0 0 30px rgba(111, 171, 255, 0.28))
+    drop-shadow(0 28px 56px rgba(0, 0, 0, 0.36));
+}
+
+.map-stage-body.space-view .map-overlay-card,
+.map-stage-body.space-view .legend-card {
+  background: rgba(8, 13, 24, 0.68);
+  border-color: rgba(220, 236, 255, 0.16);
+  color: rgba(255, 244, 220, 0.92);
+}
+
+.map-stage-body.space-view .floating-badge,
+.map-stage-body.space-view .overlay-toggle,
+.map-stage-body.space-view .context-pill {
+  background: rgba(255, 236, 196, 0.12);
+  border-color: rgba(255, 236, 196, 0.14);
+  color: rgba(255, 244, 220, 0.9);
+}
+
+.map-stage-body.space-view .map-overlay-card h3,
+.map-stage-body.space-view .legend-card {
+  color: rgba(255, 244, 220, 0.92);
+}
+
+.map-stage-body.space-view .map-overlay-card p,
+.map-stage-body.space-view .legend-row {
+  color: rgba(255, 244, 220, 0.74);
 }
 
 .map-stage-body.skin-night .context-pill,
