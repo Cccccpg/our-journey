@@ -350,7 +350,7 @@
             </div>
             <div class="legend-row">
               <i class="legend-line"></i>
-              <span>旅行动线</span>
+              <span>旅途路线</span>
             </div>
           </div>
 
@@ -1655,7 +1655,7 @@ const currentActionHint = computed(() => {
   if (currentProvince.value) {
     return '点开一座城市，看看这趟旅程在更细的地方留下了什么。'
   }
-  return '拖动旋转地球，滚轮自由缩放；足迹、照片和旅行动线会沿着经纬度浮在星球表面。'
+  return '拖动旋转地球，滚轮自由缩放；足迹、照片和旅途路线会沿着经纬度浮在星球表面。'
 })
 
 const currentLayerMetric = computed(() => {
@@ -2879,18 +2879,6 @@ function buildMaplibreStyle() {
           'line-opacity': 0.75,
         },
       },
-      // 足迹连接线
-      {
-        id: 'footprint-lines',
-        type: 'line',
-        source: 'footprints',
-        filter: ['==', ['get', 'type'], 'line'],
-        paint: {
-          'line-color': skin.line,
-          'line-width': 1.5,
-          'line-opacity': 0.56,
-        },
-      },
       // 足迹标记点
       {
         id: 'footprint-halos',
@@ -2975,25 +2963,6 @@ function buildFootprintGeoJSON() {
       },
     })
   })
-
-  // 添加连接线（按时间顺序）
-  const sorted = filteredCities.value
-    .filter((city) => city.longitude && city.latitude)
-    .sort((a, b) => new Date(a.visited_at || 0) - new Date(b.visited_at || 0))
-
-  for (let i = 1; i < sorted.length; i++) {
-    features.push({
-      type: 'Feature',
-      geometry: {
-        type: 'LineString',
-        coordinates: [
-          [sorted[i - 1].longitude, sorted[i - 1].latitude],
-          [sorted[i].longitude, sorted[i].latitude],
-        ],
-      },
-      properties: { type: 'line' },
-    })
-  }
 
   return { type: 'FeatureCollection', features }
 }
@@ -3789,14 +3758,6 @@ watch(
   display: none;
 }
 
-.topbar.condensed h1 {
-  font-size: 1.1rem;
-}
-.topbar.condensed .brand-block p,
-.topbar.condensed .breadcrumb-bar {
-  display: none;
-}
-
 .topbar.condensed .brand-block h1 {
   max-width: min(42vw, 520px);
   overflow: hidden;
@@ -4072,16 +4033,33 @@ watch(
   min-height: 0;
   height: 100%;
   border-radius: 32px;
-  overflow: auto;
-}
-
-.sidebar,
-.detail-panel {
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 20px;
-  overflow: visible;
+}
+
+.sidebar::-webkit-scrollbar,
+.detail-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar::-webkit-scrollbar-track,
+.detail-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb,
+.detail-panel::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--panel-border) 60%, transparent);
+  border-radius: 3px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover,
+.detail-panel::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .narrative-card,
@@ -6089,8 +6067,8 @@ watch(
 .journey-timeline-card {
   padding: 18px;
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.5);
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  background: color-mix(in srgb, var(--panel-soft-bg) 78%, transparent);
+  border: 1px solid var(--panel-border);
 }
 
 .journey-filter {
@@ -6118,9 +6096,9 @@ watch(
   gap: 12px;
   width: 100%;
   padding: 12px 14px;
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  border: 1px solid var(--panel-border);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.65);
+  background: color-mix(in srgb, var(--button-bg) 88%, transparent);
   cursor: pointer;
   transition: all 0.2s ease;
   font: inherit;
@@ -6129,12 +6107,13 @@ watch(
 
 .journey-item:hover {
   transform: translateY(-2px);
-  border-color: rgba(187, 77, 51, 0.2);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  background-color: color-mix(in srgb, var(--panel-soft-bg) 92%, white);
 }
 
 .journey-item.active {
-  background: rgba(187, 77, 51, 0.12);
-  border-color: rgba(187, 77, 51, 0.24);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .journey-transport {
@@ -6148,12 +6127,12 @@ watch(
 }
 
 .journey-info small {
-  color: rgba(157, 106, 47, 0.9);
+  color: var(--text-muted);
 }
 
 .journey-info p {
   margin: 4px 0 0;
-  color: rgba(36, 26, 19, 0.6);
+  color: var(--text-muted);
   font-size: 0.82rem;
 }
 
@@ -6166,8 +6145,8 @@ watch(
   padding: 20px;
   margin-bottom: 18px;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.58);
-  border: 1px solid rgba(139, 115, 85, 0.1);
+  background: color-mix(in srgb, var(--button-bg) 88%, transparent);
+  border: 1px solid var(--panel-border);
 }
 
 .route-point {
