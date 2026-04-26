@@ -5332,6 +5332,7 @@ watch(
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  margin-bottom: 18px;
 }
 
 /* 坐标选点 */
@@ -5539,6 +5540,14 @@ watch(
 .auth-error {
   color: #b83b2f;
   text-align: center;
+  margin: 12px 0 0;
+  font-size: 0.9rem;
+}
+
+.modal-card .modal-actions,
+.auth-panel .modal-actions {
+  margin-top: 20px;
+  justify-content: center;
 }
 
 .fullscreen-viewer {
