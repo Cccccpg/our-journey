@@ -3191,6 +3191,9 @@ async function initMap() {
 
   // 地图加载完成后的初始化
   mapInstance.on('load', async () => {
+    // 立即加载中国边界数据，让用户能看到省份轮廓
+    loadFullChinaBoundary()
+
     updateFootprintMarkers()
 
     // 开始自动旋转（globe 模式）
@@ -3203,14 +3206,6 @@ async function initMap() {
 
     mapInstance.on('touchstart', () => {
       globeAutoRotate = false
-    })
-
-    // 监听缩放事件，放大时加载完整边界
-    mapInstance.on('zoomend', () => {
-      const zoom = mapInstance.getZoom()
-      if (zoom >= 4 && !chinaBoundaryLoaded.value) {
-        loadFullChinaBoundary()
-      }
     })
   })
 
