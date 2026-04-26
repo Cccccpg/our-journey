@@ -1120,6 +1120,35 @@ function dismissSystemNotice() {
   systemNoticeMessage.value = ''
 }
 
+function clearMapTextureTimers() {
+  if (mapTextureReadyTimer) {
+    window.clearTimeout(mapTextureReadyTimer)
+    mapTextureReadyTimer = null
+  }
+  if (mapTextureFallbackTimer) {
+    window.clearTimeout(mapTextureFallbackTimer)
+    mapTextureFallbackTimer = null
+  }
+}
+
+function markMapTextureLoading() {
+  clearMapTextureTimers()
+  isMapTextureReady.value = false
+  // 地图样式事件偶尔会在快速钻取时丢失，这个兜底避免加载遮罩卡死。
+  mapTextureFallbackTimer = window.setTimeout(() => {
+    isMapTextureReady.value = true
+    mapTextureFallbackTimer = null
+  }, 1400)
+}
+
+function markMapTextureReady(delay = 260) {
+  if (mapTextureReadyTimer) window.clearTimeout(mapTextureReadyTimer)
+  mapTextureReadyTimer = window.setTimeout(() => {
+    isMapTextureReady.value = true
+    clearMapTextureTimers()
+  }, delay)
+}
+
 function updateTopbarCondensed() {
   const scrollTop = Math.max(window.scrollY || 0, appShellRef.value?.scrollTop || 0)
   topbarCondensed.value = scrollTop > (isMobile.value ? 70 : 120)
@@ -1167,6 +1196,8 @@ const hoverLabel = ref(null)
 const tooltipPosition = ref({ x: 0, y: 0 })
 let mapResizeObserver = null
 let mapResizeTimer = null
+let mapTextureReadyTimer = null
+let mapTextureFallbackTimer = null
 
 let globeAutoRotate = true
 let globeRotateTimer = null
@@ -3109,14 +3140,14 @@ async function loadFullChinaBoundary() {
 
 function updateMapView() {
   if (!mapInstance) return
-  isMapTextureReady.value = false
+  markMapTextureLoading()
 
   // 清除旧的 DOM 标注，省份名称不再使用浮层小卡片显示。
   clearProvinceLabelMarkers()
 
   mapInstance.setStyle(buildMaplibreStyle())
 
-  mapInstance.once('style.load', () => {
+  const restoreMapLayers = () => {
     // 重新设置边界数据
     if (chinaGeoCache.value) {
       updateChinaBoundaryLayer(chinaGeoCache.value)
@@ -3129,10 +3160,11 @@ function updateMapView() {
     }
 
     updateFootprintMarkers()
-    window.setTimeout(() => {
-      isMapTextureReady.value = true
-    }, 320)
-  })
+    markMapTextureReady(320)
+  }
+
+  mapInstance.once('style.load', restoreMapLayers)
+  mapInstance.once('idle', () => markMapTextureReady(120))
 }
 
 function startAutoRotate() {
@@ -3154,7 +3186,7 @@ function stopAutoRotate() {
 
 async function initMap() {
   if (!mapRef.value) return
-  isMapTextureReady.value = false
+  markMapTextureLoading()
 
   const maplibreGl = await loadMapLibreGL()
   maplibreGlModule = maplibreGl // 存储模块供后续使用
@@ -3184,9 +3216,7 @@ async function initMap() {
     await loadFullChinaBoundary()
 
     updateFootprintMarkers()
-    window.setTimeout(() => {
-      isMapTextureReady.value = true
-    }, 450)
+    markMapTextureReady(450)
 
     // 开始自动旋转（globe 模式）
     startAutoRotate()
@@ -3504,6 +3534,7 @@ onUnmounted(() => {
   if (mapResizeTimer) {
     window.clearTimeout(mapResizeTimer)
   }
+  clearMapTextureTimers()
   stopAutoRotate()
   clearProvinceLabelMarkers()
   mapInstance?.remove()
