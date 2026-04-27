@@ -45,4 +45,4 @@ pm2 start backend/server.js --name travel-backend
 
 ## 编辑模式
 
-访问 `/edit?token=travel2024love` 进入编辑模式，密码为 `xxxxx`
+点击页面上的“编辑模式/解锁编辑”后输入密码即可进入编辑模式；`token` 已不再需要暴露在 URL 中。

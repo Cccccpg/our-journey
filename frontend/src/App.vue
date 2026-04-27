@@ -1296,6 +1296,8 @@ let mapResizeObserver = null
 let mapResizeTimer = null
 let mapTextureReadyTimer = null
 let mapTextureFallbackTimer = null
+let journeyAnimationTimer = null
+let journeyAnimationFrame = 0
 
 let globeAutoRotate = true
 let globeRotateTimer = null
@@ -1783,6 +1785,41 @@ function localSemanticSearch(query, records = scopedCities.value) {
     .map((item) => item.city.id)
 }
 
+function buildLocalMapSummary(records = filteredCities.value) {
+  const source = records.slice(0, 36)
+  const tagSet = new Set()
+  const cities = new Set()
+  let photoCount = 0
+
+  source.forEach((city) => {
+    if (city.name) cities.add(city.name)
+    photoCount += Number(city.photo_count || 0)
+    parseTags(city.tags).forEach((tag) => tagSet.add(tag))
+  })
+
+  const firstStory = source.find((city) => city.description)?.description
+  const highlights = [
+    `${source.length} 段足迹散落在 ${cities.size || source.length} 个地点`,
+    `${photoCount} 张照片把路线上的瞬间保留下来`,
+    tagSet.size ? `${tagSet.size} 个标签串起这段旅行的情绪` : '还可以继续补充标签和故事',
+  ]
+
+  return {
+    headline: source.length ? `${currentAiScope.value}的旅行切片` : '等待第一段旅行记忆',
+    summary: firstStory
+      ? `当前视角里最有画面感的一段记忆是：${safeSummaryText(firstStory)}`
+      : source.length
+        ? '当前视角已经有足迹记录，可以继续补充照片、标签和旅途备注，让这张地图更像一本会呼吸的旅行手账。'
+        : '当前地图视角还没有足迹，可以从地图选点开始记录第一段故事。',
+    highlights,
+    next_prompt: '可以继续筛选地点，或添加一段新的旅途路线。',
+  }
+}
+
+function safeSummaryText(text) {
+  return String(text || '').replace(/\s+/g, ' ').slice(0, 120)
+}
+
 function ensureAiAccess() {
   if (editMode.isAuthenticated) return true
   showSystemNotice('请先解锁编辑模式，再使用 AI 生成能力。', 'error')
@@ -1829,7 +1866,8 @@ async function runAiMapSummary() {
     aiMapSummary.value = data
     showToast('AI 已总结当前视角')
   } catch (error) {
-    showSystemNotice(error.response?.data?.error || 'AI 总结失败，请稍后再试。', 'error')
+    aiMapSummary.value = buildLocalMapSummary()
+    showSystemNotice(error.response?.data?.error || 'AI 服务暂时不可用，已先生成本地视角总结。', 'error')
   } finally {
     aiBusy.value.summary = false
   }
@@ -1870,8 +1908,8 @@ async function runAiSearch() {
     const ids = localSemanticSearch(query, scopedCities.value)
     aiMatchedIds.value = ids
     aiSearchReason.value = ids.length
-      ? `AI 服务暂时不可用，已用本地搜索找到 ${ids.length} 条相关足迹`
-      : 'AI 服务暂时不可用，本地也没有找到相关足迹'
+      ? `已用本地索引找到 ${ids.length} 条相关足迹，AI 服务恢复后会自动使用语义搜索`
+      : '暂时没有找到相关足迹，AI 服务恢复后可以再试一次'
     if (ids.length) {
       searchQuery.value = ''
       activeFilter.value = 'all'
@@ -2864,6 +2902,16 @@ function getTransportSymbol(type) {
   }
 }
 
+function getTransportMapIcon(type) {
+  switch (type) {
+    case 'flight': return '✈'
+    case 'train': return '🚆'
+    case 'car': return '🚗'
+    case 'ship': return '⛴'
+    default: return '•'
+  }
+}
+
 function colorWithAlpha(color, alpha) {
   if (!color) return `rgba(255, 255, 255, ${alpha})`
   if (color.startsWith('rgba')) return color
@@ -2918,36 +2966,42 @@ function requestMapResize(delay = 60) {
 
 // ========== MapLibre GL 地图函数 ==========
 
-function getPrimaryTileSource() {
-  // AMap is more reliable on China mobile networks and keeps Chinese labels baked into the tiles.
-  return {
-    type: 'raster',
-    tiles: [
-      'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-      'https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-      'https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-      'https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+function getGlobalTileSource(skinId = activeMapSkin.value) {
+  const tileSets = {
+    night: [
+      'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+      'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+      'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
     ],
-    tileSize: 256,
-    minzoom: 1,
-    maxzoom: 18,
-    bounds: [73, 3, 136, 54],
-    attribution: 'AMap',
+    warm: [
+      'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    ],
+    vintage: [
+      'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    ],
+    aero: [
+      'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+      'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+      'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    ],
   }
-}
 
-function getBackupTileSource() {
   return {
     type: 'raster',
-    tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+    tiles: tileSets[skinId] || tileSets.warm,
     tileSize: 256,
     minzoom: 0,
     maxzoom: 19,
-    attribution: '© OpenStreetMap contributors',
+    bounds: [-180, -85.051129, 180, 85.051129],
+    attribution: '© OpenStreetMap contributors © CARTO',
   }
 }
 
-function getBackupTileLayerPaint(skinId) {
+function getGlobalTileLayerPaint(skinId) {
   return getBaseTileLayerPaint(skinId)
 }
 
@@ -2955,13 +3009,13 @@ function getBaseTileLayerPaint(skinId) {
   // 根据主题调整瓦片显示效果
   switch (skinId) {
     case 'night':
-      // 星图主题：深邃夜空效果
+      // 星图主题使用深色全球底图，避免 3D 地球出现刺眼白色半球。
       return {
-        'raster-saturation': -0.72,
-        'raster-contrast': 0.42,
-        'raster-brightness-min': 0.04,
-        'raster-brightness-max': 0.48,
-        'raster-opacity': 0.76,
+        'raster-saturation': -0.14,
+        'raster-contrast': 0.08,
+        'raster-brightness-min': 0.02,
+        'raster-brightness-max': 0.86,
+        'raster-opacity': 0.96,
       }
     case 'warm':
       // 暖砂主题：傍晚暖色调
@@ -3025,8 +3079,7 @@ function buildMaplibreStyle() {
     projection: { type: 'globe' },
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
-      'backup-tiles': getBackupTileSource(),
-      'base-tiles': getPrimaryTileSource(),
+      'global-tiles': getGlobalTileSource(activeMapSkin.value),
       'footprints': {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -3058,27 +3111,11 @@ function buildMaplibreStyle() {
           'background-opacity': 1,
         },
       },
-      // OSM瓦片层（带主题滤镜）
       {
-        id: 'backup-tile-layer',
+        id: 'global-tile-layer',
         type: 'raster',
-        source: 'backup-tiles',
-        paint: getBackupTileLayerPaint(activeMapSkin.value),
-      },
-      {
-        id: 'base-tile-layer',
-        type: 'raster',
-        source: 'base-tiles',
-        paint: getBaseTileLayerPaint(activeMapSkin.value),
-      },
-      // 海洋暗部光照层（globe模式下增强真实感）
-      {
-        id: 'ocean-glow',
-        type: 'background',
-        paint: {
-          'background-color': activeMapSkin.value === 'night' ? 'rgba(11, 17, 28, 0.3)' : 'rgba(255, 250, 240, 0.15)',
-          'background-opacity': (!currentProvince.value && !currentCityArea.value) ? 0.25 : 0,
-        },
+        source: 'global-tiles',
+        paint: getGlobalTileLayerPaint(activeMapSkin.value),
       },
       // 全国省份边界填充（globe视图下显示）
       {
@@ -3087,7 +3124,7 @@ function buildMaplibreStyle() {
         source: 'china-boundary',
         paint: {
           'fill-color': skin.landAlt || skin.land,
-          'fill-opacity': (!currentProvince.value && !currentCityArea.value) ? 0.35 : 0,
+          'fill-opacity': (!currentProvince.value && !currentCityArea.value && activeMapSkin.value !== 'night') ? 0.05 : 0,
         },
       },
       // 全国省份边界线
@@ -3167,11 +3204,11 @@ function buildMaplibreStyle() {
         id: 'journey-flight',
         type: 'line',
         source: 'journeys',
-        filter: ['==', ['get', 'transport'], 'flight'],
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'flight']],
         paint: {
           'line-color': routeColors.flight,
-          'line-width': 2.5,
-          'line-opacity': 0.85,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.4, 8, 4.6],
+          'line-opacity': 0.72,
         },
       },
       // 旅程路线 - 火车
@@ -3179,10 +3216,10 @@ function buildMaplibreStyle() {
         id: 'journey-train',
         type: 'line',
         source: 'journeys',
-        filter: ['==', ['get', 'transport'], 'train'],
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'train']],
         paint: {
           'line-color': routeColors.train,
-          'line-width': 2,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.2, 8, 4],
           'line-dasharray': [2, 2],
           'line-opacity': 0.75,
         },
@@ -3192,10 +3229,11 @@ function buildMaplibreStyle() {
         id: 'journey-car',
         type: 'line',
         source: 'journeys',
-        filter: ['==', ['get', 'transport'], 'car'],
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'car']],
         paint: {
           'line-color': routeColors.car,
-          'line-width': 2.5,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.4, 8, 4.2],
+          'line-dasharray': [1, 1.4],
           'line-opacity': 0.7,
         },
       },
@@ -3204,11 +3242,72 @@ function buildMaplibreStyle() {
         id: 'journey-ship',
         type: 'line',
         source: 'journeys',
-        filter: ['==', ['get', 'transport'], 'ship'],
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'ship']],
         paint: {
           'line-color': routeColors.ship,
-          'line-width': 2,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.2, 8, 4],
+          'line-dasharray': [3, 1.2],
           'line-opacity': 0.75,
+        },
+      },
+      {
+        id: 'journey-flow-flight',
+        type: 'line',
+        source: 'journeys',
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'flight']],
+        paint: {
+          'line-color': routeColors.flight,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 4, 8, 7],
+          'line-opacity': 0.35,
+        },
+      },
+      {
+        id: 'journey-flow-train',
+        type: 'line',
+        source: 'journeys',
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'train']],
+        paint: {
+          'line-color': routeColors.train,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 3.4, 8, 6],
+          'line-opacity': 0.32,
+        },
+      },
+      {
+        id: 'journey-flow-car',
+        type: 'line',
+        source: 'journeys',
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'car']],
+        paint: {
+          'line-color': routeColors.car,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 3.6, 8, 6],
+          'line-opacity': 0.32,
+        },
+      },
+      {
+        id: 'journey-flow-ship',
+        type: 'line',
+        source: 'journeys',
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'ship']],
+        paint: {
+          'line-color': routeColors.ship,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 3.4, 8, 6],
+          'line-opacity': 0.32,
+        },
+      },
+      {
+        id: 'journey-vehicles',
+        type: 'symbol',
+        source: 'journeys',
+        filter: ['==', ['get', 'type'], 'vehicle'],
+        layout: {
+          'text-field': ['get', 'icon'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 16, 8, 22],
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+        },
+        paint: {
+          'text-halo-color': getLabelHaloColor(activeMapSkin.value),
+          'text-halo-width': 2,
         },
       },
       // 足迹标记点
@@ -3320,10 +3419,25 @@ function buildJourneyGeoJSON() {
         coordinates: [from, [midLon, midLat + arcHeight], to],
       },
       properties: {
+        type: 'route',
         transport: journey.transport_type,
         id: journey.id,
         from_city: journey.from_city_name,
         to_city: journey.to_city_name,
+      },
+    })
+
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [midLon, midLat + arcHeight],
+      },
+      properties: {
+        type: 'vehicle',
+        transport: journey.transport_type,
+        icon: getTransportMapIcon(journey.transport_type),
+        id: journey.id,
       },
     })
   })
@@ -3479,6 +3593,7 @@ function updateMapView() {
     }
 
     updateFootprintMarkers()
+    startJourneyAnimation()
     markMapTextureReady(320)
   }
 
@@ -3500,6 +3615,53 @@ function stopAutoRotate() {
   if (globeRotateTimer) {
     window.clearInterval(globeRotateTimer)
     globeRotateTimer = null
+  }
+}
+
+function buildJourneyFlowGradient(color, progress) {
+  const phase = Math.floor(progress * 6) % 6
+  const patterns = [
+    [0.2, 2.8, 1.8, 2.2],
+    [0.6, 2.4, 1.8, 2.2],
+    [1, 2, 1.8, 2.2],
+    [1.4, 1.6, 1.8, 2.2],
+    [1.8, 1.2, 1.8, 2.2],
+    [2.2, 0.8, 1.8, 2.2],
+  ]
+  return patterns[phase]
+}
+
+function updateJourneyAnimationFrame() {
+  if (!mapInstance) return
+  const routeColors = activeMapSkinConfig.value.routes
+  const progress = 0.15 + ((journeyAnimationFrame % 70) / 100)
+  const flowLayers = [
+    ['journey-flow-flight', routeColors.flight],
+    ['journey-flow-train', routeColors.train],
+    ['journey-flow-car', routeColors.car],
+    ['journey-flow-ship', routeColors.ship],
+  ]
+
+  flowLayers.forEach(([layerId, color]) => {
+    if (mapInstance.getLayer(layerId)) {
+      mapInstance.setPaintProperty(layerId, 'line-color', colorWithAlpha(color, 0.9))
+      mapInstance.setPaintProperty(layerId, 'line-dasharray', buildJourneyFlowGradient(color, progress))
+      mapInstance.setPaintProperty(layerId, 'line-opacity', 0.24 + Math.sin(progress * Math.PI * 2) * 0.08)
+    }
+  })
+  journeyAnimationFrame += 2
+}
+
+function startJourneyAnimation() {
+  if (journeyAnimationTimer) return
+  updateJourneyAnimationFrame()
+  journeyAnimationTimer = window.setInterval(updateJourneyAnimationFrame, 90)
+}
+
+function stopJourneyAnimation() {
+  if (journeyAnimationTimer) {
+    window.clearInterval(journeyAnimationTimer)
+    journeyAnimationTimer = null
   }
 }
 
@@ -3539,6 +3701,7 @@ async function initMap() {
 
     // 开始自动旋转（globe 模式）
     startAutoRotate()
+    startJourneyAnimation()
 
     // 设置鼠标交互时停止自动旋转
     mapInstance.on('mousedown', () => {
@@ -3855,6 +4018,7 @@ onUnmounted(() => {
   }
   clearMapTextureTimers()
   stopAutoRotate()
+  stopJourneyAnimation()
   clearProvinceLabelMarkers()
   mapInstance?.remove()
   mapInstance = null

@@ -8,6 +8,20 @@ const DEFAULT_MODEL = 'GLM-5.1';
 const MAX_RECORDS = 36;
 const requestBuckets = new Map();
 
+function normalizeArkBaseUrl(value) {
+  let base = String(value || DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
+  if (!base) return DEFAULT_BASE_URL;
+  if (base.endsWith('/chat/completions')) {
+    base = base.slice(0, -'/chat/completions'.length);
+  }
+  return base;
+}
+
+function getChatCompletionsUrl() {
+  if (process.env.ARK_CHAT_COMPLETIONS_URL) return process.env.ARK_CHAT_COMPLETIONS_URL;
+  return `${normalizeArkBaseUrl(process.env.ARK_BASE_URL || DEFAULT_BASE_URL)}/chat/completions`;
+}
+
 function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'local';
 }
@@ -30,21 +44,6 @@ function rateLimit(req, res, next) {
   }
 
   next();
-}
-
-function getChatCompletionsUrl() {
-  if (process.env.ARK_CHAT_COMPLETIONS_URL) return process.env.ARK_CHAT_COMPLETIONS_URL;
-  const base = normalizeArkBaseUrl(process.env.ARK_BASE_URL || DEFAULT_BASE_URL);
-  return `${base}/chat/completions`;
-}
-
-function normalizeArkBaseUrl(value) {
-  let base = String(value || DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
-  if (!base) return DEFAULT_BASE_URL;
-  if (base.endsWith('/chat/completions')) {
-    base = base.slice(0, -'/chat/completions'.length);
-  }
-  return base;
 }
 
 function safeText(value, maxLength = 1200) {
@@ -80,22 +79,24 @@ function compactJourney(journey = {}) {
 function extractJson(content) {
   if (!content) return {};
 
+  const raw = String(content).trim();
   try {
-    return JSON.parse(content);
+    return JSON.parse(raw);
   } catch (error) {
-    const match = String(content).match(/\{[\s\S]*\}/);
-    if (!match) return {};
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced?.[1] || raw.match(/\{[\s\S]*\}/)?.[0];
+    if (!candidate) return {};
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(candidate);
     } catch (innerError) {
       return {};
     }
   }
 }
 
-async function callModel({ system, user, temperature = 0.78 }) {
+async function callModel({ system, user, temperature = 0.72 }) {
   const apiKey = process.env.ARK_API_KEY;
-  if (!apiKey) {
+  if (!apiKey || apiKey === 'replace_with_your_ark_api_key') {
     const error = new Error('ARK_API_KEY is not configured');
     error.status = 503;
     throw error;
@@ -132,6 +133,14 @@ async function callModel({ system, user, temperature = 0.78 }) {
 
     const data = await response.json();
     return data.choices?.[0]?.message?.content || data.choices?.[0]?.text || data.output_text || data.output?.text || '';
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      const timeoutError = new Error('AI provider request timed out');
+      timeoutError.status = 504;
+      timeoutError.providerUrl = getChatCompletionsUrl();
+      throw timeoutError;
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -141,18 +150,21 @@ function sendAiError(res, error) {
   console.error('[AI]', {
     status: error.status,
     url: error.providerUrl || getChatCompletionsUrl(),
-    message: error.message,
+    message: String(error.message || '').slice(0, 500),
   });
+
   const status = error.status && error.status >= 400 && error.status < 600 ? error.status : 502;
   const messageByStatus = {
-    401: 'AI 鉴权失败，请检查 ARK_API_KEY 是否正确。',
-    403: 'AI 无权调用当前模型，请检查模型权限或 ARK_MODEL 配置。',
-    404: 'AI 接口地址不存在，请确认 ARK_BASE_URL 使用 https://ark.cn-beijing.volces.com/api/coding/v3。',
-    429: 'AI 调用过于频繁，请稍后再试。',
-    503: 'AI 服务尚未配置，请先设置 ARK_API_KEY。',
+    401: 'AI 鉴权失败，请检查 ARK_API_KEY 是否正确',
+    403: 'AI 无权调用当前模型，请检查模型权限或 ARK_MODEL 配置',
+    404: 'AI 接口地址不存在，请确认 ARK_BASE_URL 使用 https://ark.cn-beijing.volces.com/api/coding/v3',
+    429: 'AI 调用过于频繁，请稍后再试',
+    503: 'AI 服务尚未配置，请先设置 ARK_API_KEY',
+    504: 'AI 响应超时，请稍后再试',
   };
+
   res.status(status).json({
-    error: messageByStatus[status] || 'AI 生成暂时失败，请稍后再试。',
+    error: messageByStatus[status] || 'AI 生成暂时失败，请稍后再试',
   });
 }
 
@@ -198,8 +210,8 @@ router.post('/map-summary', async (req, res) => {
     const content = await callModel({
       system:
         '你是旅行记忆网站的中文旁白编辑。只返回严格 JSON，不要 Markdown。字段：headline, summary, highlights, next_prompt。highlights 是 3 个短句数组。',
-      user: `请基于当前地图视角生成一张“旅行记忆总结卡”。视角：${scope}\n足迹数据：${JSON.stringify(records, null, 2)}`,
-      temperature: 0.72,
+      user: `请基于当前地图视角生成一张“旅行记忆总结卡”。视角：${scope}\n足迹数据：\n${JSON.stringify(records, null, 2)}`,
+      temperature: 0.68,
     });
     const json = extractJson(content);
     res.json({
@@ -226,7 +238,7 @@ router.post('/search', async (req, res) => {
       system:
         '你是旅行足迹的语义搜索助手。只返回严格 JSON，不要 Markdown。字段：matched_ids, reason。matched_ids 是数字 ID 数组，最多 8 个。',
       user: `用户想找：“${query}”。请从足迹数据中找最相关记录，只返回已有 id：\n${JSON.stringify(records, null, 2)}`,
-      temperature: 0.25,
+      temperature: 0.2,
     });
     const json = extractJson(content);
     res.json({

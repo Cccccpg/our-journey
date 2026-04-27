@@ -7,16 +7,17 @@ const { JWT_SECRET } = require('../middleware/authMiddleware');
 const router = express.Router();
 
 router.post('/', (req, res) => {
-  const { token, password } = req.body;
+  const { password } = req.body;
+  const token = req.body.token || process.env.EDIT_TOKEN || 'travel2024love';
 
-  if (!token || !password) {
-    return res.status(400).json({ error: 'token和密码都必需' });
+  if (!password) {
+    return res.status(400).json({ error: '密码不能为空' });
   }
 
   const tokenRow = db.prepare('SELECT * FROM edit_tokens WHERE token = ?').get(token);
 
   if (!tokenRow) {
-    return res.status(401).json({ error: '无效的编辑链接' });
+    return res.status(401).json({ error: '编辑入口暂不可用，请检查 EDIT_TOKEN 配置' });
   }
 
   const match = bcrypt.compareSync(password, tokenRow.password_hash);
@@ -26,7 +27,7 @@ router.post('/', (req, res) => {
   }
 
   const jwtToken = jwt.sign(
-    { tokenId: tokenRow.id, token: token },
+    { tokenId: tokenRow.id, token },
     JWT_SECRET,
     { expiresIn: '24h' }
   );

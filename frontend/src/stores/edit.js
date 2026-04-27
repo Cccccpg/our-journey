@@ -14,10 +14,16 @@ export const useEditStore = defineStore('edit', {
     checkEditMode() {
       const urlParams = new URLSearchParams(window.location.search)
       this.token = urlParams.get('token')
-      if (this.token) {
-        this.isEditMode = true
-        this.checkExistingAuth()
+      this.isEditMode = true
+
+      if (urlParams.has('token')) {
+        urlParams.delete('token')
+        const query = urlParams.toString()
+        const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`
+        window.history.replaceState({}, '', cleanUrl)
       }
+
+      this.checkExistingAuth()
     },
 
     async checkExistingAuth() {
@@ -29,13 +35,10 @@ export const useEditStore = defineStore('edit', {
             this.isAuthenticated = true
           } else {
             localStorage.removeItem('jwt')
-            this.showPasswordModal = true
           }
         } catch {
-          this.showPasswordModal = true
+          localStorage.removeItem('jwt')
         }
-      } else {
-        this.showPasswordModal = true
       }
     },
 

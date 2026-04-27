@@ -17,7 +17,6 @@ if (fs.existsSync(envPath)) {
 }
 
 const db = require('./db/database');
-
 const placesRoutes = require('./routes/places');
 const photosRoutes = require('./routes/photos');
 const authRoutes = require('./routes/auth');
@@ -26,31 +25,25 @@ const journeysRoutes = require('./routes/journeys');
 const aiRoutes = require('./routes/ai');
 
 const app = express();
-const PORT = 8080;
+const PORT = Number(process.env.PORT || 8080);
 
-// 中间件
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// 确保照片目录存在
 const photosDir = path.join(__dirname, '..', 'photos');
 if (!fs.existsSync(photosDir)) {
   fs.mkdirSync(photosDir, { recursive: true });
 }
 
-// API 路由
 app.use('/api/places', placesRoutes);
 app.use('/api/photos', photosRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/themes', themesRoutes);
 app.use('/api/journeys', journeysRoutes);
 app.use('/api/ai', aiRoutes);
-
-// 照片静态文件服务
 app.use('/photos', express.static(photosDir));
 
-// 前端静态文件服务（生产环境）
 const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
@@ -60,7 +53,6 @@ if (fs.existsSync(frontendDist)) {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`服务器运行在 http://localhost:${PORT}`);
-  console.log(`编辑链接: http://localhost:${PORT}/edit?token=travel2024love`);
-  console.log(`编辑密码: 20230225`);
+  console.log(`服务已启动：http://localhost:${PORT}`);
+  console.log('编辑模式：打开页面后点击“解锁编辑”，输入密码即可');
 });
