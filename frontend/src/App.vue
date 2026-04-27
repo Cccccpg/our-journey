@@ -208,7 +208,7 @@
               placeholder="AI 搜索：比如下雨天、夜景、第一次旅行"
               @keyup.enter="runAiSearch"
             />
-            <button class="ghost-btn ai-action-btn" :disabled="!editMode.isAuthenticated || aiBusy.search" @click="runAiSearch">
+            <button class="ghost-btn ai-action-btn" :disabled="aiBusy.search" @click="runAiSearch">
               {{ aiBusy.search ? '查找中' : 'AI 搜索' }}
             </button>
           </div>
@@ -1750,6 +1750,39 @@ function buildAiRecords(records = filteredCities.value) {
   }))
 }
 
+function localSemanticSearch(query, records = scopedCities.value) {
+  const keywords = query
+    .toLowerCase()
+    .split(/[\s,，。.!！?？、]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  if (!keywords.length) return []
+
+  return records
+    .map((city) => {
+      const fields = [
+        city.name,
+        city.city_name,
+        city.district_name,
+        city.province_name,
+        city.description,
+        city.tags,
+        formatDate(city.visited_at),
+        citySummary(city),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      const score = keywords.reduce((sum, keyword) => sum + (fields.includes(keyword) ? 1 : 0), 0)
+      return { city, score }
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map((item) => item.city.id)
+}
+
 function ensureAiAccess() {
   if (editMode.isAuthenticated) return true
   showSystemNotice('请先解锁编辑模式，再使用 AI 生成能力。', 'error')
@@ -1803,7 +1836,7 @@ async function runAiMapSummary() {
 }
 
 async function runAiSearch() {
-  if (!ensureAiAccess() || aiBusy.value.search) return
+  if (aiBusy.value.search) return
   const query = aiSearchQuery.value.trim()
   if (!query) {
     showSystemNotice('先输入想找的旅行记忆，比如“下雨天去过的地方”。', 'error')
@@ -1812,13 +1845,18 @@ async function runAiSearch() {
 
   aiBusy.value.search = true
   try {
-    const { data } = await searchFootprintsWithAi({
-      query,
-      records: buildAiRecords(scopedCities.value),
-    })
-    const ids = Array.isArray(data.matched_ids) ? data.matched_ids : []
+    let data = null
+    if (editMode.isAuthenticated) {
+      const response = await searchFootprintsWithAi({
+        query,
+        records: buildAiRecords(scopedCities.value),
+      })
+      data = response.data
+    }
+    const aiIds = Array.isArray(data?.matched_ids) ? data.matched_ids : []
+    const ids = aiIds.length ? aiIds : localSemanticSearch(query, scopedCities.value)
     aiMatchedIds.value = ids
-    aiSearchReason.value = data.reason || (ids.length ? `AI 找到 ${ids.length} 条相关足迹` : 'AI 暂时没有找到相关足迹')
+    aiSearchReason.value = data?.reason || (ids.length ? `已找到 ${ids.length} 条相关足迹` : '暂时没有找到相关足迹')
     if (ids.length) {
       searchQuery.value = ''
       activeFilter.value = 'all'
@@ -1829,7 +1867,22 @@ async function runAiSearch() {
       }
     }
   } catch (error) {
-    showSystemNotice(error.response?.data?.error || 'AI 搜索失败，请稍后再试。', 'error')
+    const ids = localSemanticSearch(query, scopedCities.value)
+    aiMatchedIds.value = ids
+    aiSearchReason.value = ids.length
+      ? `AI 服务暂时不可用，已用本地搜索找到 ${ids.length} 条相关足迹`
+      : 'AI 服务暂时不可用，本地也没有找到相关足迹'
+    if (ids.length) {
+      searchQuery.value = ''
+      activeFilter.value = 'all'
+      activeYear.value = 'all'
+      const matched = placesStore.cities.filter((city) => ids.includes(city.id))
+      if (matched[0]) {
+        await selectFootprint(matched[0].id)
+      }
+    } else {
+      showSystemNotice(error.response?.data?.error || 'AI 搜索失败，且本地没有匹配结果。', 'error')
+    }
   } finally {
     aiBusy.value.search = false
   }
@@ -2878,6 +2931,7 @@ function getPrimaryTileSource() {
     tileSize: 256,
     minzoom: 1,
     maxzoom: 18,
+    bounds: [73, 3, 136, 54],
     attribution: 'AMap',
   }
 }
@@ -2894,11 +2948,7 @@ function getBackupTileSource() {
 }
 
 function getBackupTileLayerPaint(skinId) {
-  const basePaint = getBaseTileLayerPaint(skinId)
-  return {
-    ...basePaint,
-    'raster-opacity': Math.min(basePaint['raster-opacity'] ?? 0.72, 0.58),
-  }
+  return getBaseTileLayerPaint(skinId)
 }
 
 function getBaseTileLayerPaint(skinId) {

@@ -3,7 +3,7 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-const DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v';
+const DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3';
 const DEFAULT_MODEL = 'GLM-5.1';
 const MAX_RECORDS = 36;
 const requestBuckets = new Map();
@@ -34,8 +34,17 @@ function rateLimit(req, res, next) {
 
 function getChatCompletionsUrl() {
   if (process.env.ARK_CHAT_COMPLETIONS_URL) return process.env.ARK_CHAT_COMPLETIONS_URL;
-  const base = (process.env.ARK_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
+  const base = normalizeArkBaseUrl(process.env.ARK_BASE_URL || DEFAULT_BASE_URL);
   return `${base}/chat/completions`;
+}
+
+function normalizeArkBaseUrl(value) {
+  let base = String(value || DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
+  if (!base) return DEFAULT_BASE_URL;
+  if (base.endsWith('/chat/completions')) {
+    base = base.slice(0, -'/chat/completions'.length);
+  }
+  return base;
 }
 
 function safeText(value, maxLength = 1200) {
@@ -117,21 +126,33 @@ async function callModel({ system, user, temperature = 0.78 }) {
       const detail = await response.text().catch(() => '');
       const error = new Error(detail || 'AI provider request failed');
       error.status = response.status;
+      error.providerUrl = getChatCompletionsUrl();
       throw error;
     }
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || data.output_text || '';
+    return data.choices?.[0]?.message?.content || data.choices?.[0]?.text || data.output_text || data.output?.text || '';
   } finally {
     clearTimeout(timeout);
   }
 }
 
 function sendAiError(res, error) {
-  console.error('[AI]', error.message);
+  console.error('[AI]', {
+    status: error.status,
+    url: error.providerUrl || getChatCompletionsUrl(),
+    message: error.message,
+  });
   const status = error.status && error.status >= 400 && error.status < 600 ? error.status : 502;
+  const messageByStatus = {
+    401: 'AI 鉴权失败，请检查 ARK_API_KEY 是否正确。',
+    403: 'AI 无权调用当前模型，请检查模型权限或 ARK_MODEL 配置。',
+    404: 'AI 接口地址不存在，请确认 ARK_BASE_URL 使用 https://ark.cn-beijing.volces.com/api/coding/v3。',
+    429: 'AI 调用过于频繁，请稍后再试。',
+    503: 'AI 服务尚未配置，请先设置 ARK_API_KEY。',
+  };
   res.status(status).json({
-    error: status === 503 ? 'AI 服务尚未配置，请先设置 ARK_API_KEY' : 'AI 生成暂时失败，请稍后再试',
+    error: messageByStatus[status] || 'AI 生成暂时失败，请稍后再试。',
   });
 }
 
