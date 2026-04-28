@@ -2957,21 +2957,25 @@ function getJourneyRouteCoordinates(journey) {
   const to = [Number(journey.to_lon), Number(journey.to_lat)]
   const type = journey.transport_type || 'car'
   const config = transportConfig[type] || transportConfig.car
-  const steps = type === 'flight' ? 32 : 22
+  const steps = type === 'flight' ? 72 : 30
   const dx = to[0] - from[0]
   const dy = to[1] - from[1]
   const distance = Math.hypot(dx, dy)
   const normal = distance ? [-dy / distance, dx / distance] : [0, 1]
-  const lift = Math.max(distance * config.lift, type === 'flight' ? 1.2 : 0)
+  const lift = Math.max(distance * config.lift, type === 'flight' ? 2.8 : 0)
+  const direction = dx >= 0 ? 1 : -1
 
   return Array.from({ length: steps + 1 }, (_, index) => {
     const t = index / steps
     const ease = Math.sin(Math.PI * t)
     const wave = Math.sin(Math.PI * 2 * t) * distance * (config.wave || 0)
-    const arc = lift * ease
+    const flightBow = type === 'flight' ? Math.sin(Math.PI * t) * distance * 0.12 * direction : 0
+    const arc = type === 'flight'
+      ? lift * Math.pow(ease, 0.72)
+      : lift * ease
     return [
-      from[0] + dx * t + normal[0] * wave,
-      from[1] + dy * t + normal[1] * wave + arc,
+      from[0] + dx * t + normal[0] * (wave + flightBow),
+      from[1] + dy * t + normal[1] * (wave + flightBow) + arc,
     ]
   })
 }
@@ -3008,7 +3012,7 @@ function getPointOnRoute(coords, progress) {
 
 function buildRouteBeads(journey, coordinates) {
   if (journey.transport_type !== 'flight') return []
-  const steps = 9
+  const steps = 15
   return Array.from({ length: steps }, (_, index) => {
     const progress = (index + 1) / (steps + 1)
     const { point } = getPointOnRoute(coordinates, progress)
@@ -3091,19 +3095,22 @@ function getGlobalTileSource(skinId = activeMapSkin.value) {
       'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
     ],
     warm: [
-      'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-      'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-      'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
     ],
     vintage: [
-      'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-      'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-      'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+      'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
     ],
     aero: [
-      'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-      'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-      'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+      'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+      'https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
     ],
   }
 
@@ -3114,7 +3121,7 @@ function getGlobalTileSource(skinId = activeMapSkin.value) {
     minzoom: 0,
     maxzoom: 19,
     bounds: [-180, -85.051129, 180, 85.051129],
-    attribution: '© OpenStreetMap contributors © CARTO',
+    attribution: skinId === 'night' ? '© OpenStreetMap contributors © CARTO' : '© AutoNavi',
   }
 }
 
@@ -3318,6 +3325,31 @@ function buildMaplibreStyle() {
       },
       // 旅程路线 - 飞机
       {
+        id: 'journey-flight-shadow',
+        type: 'line',
+        source: 'journeys',
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'flight']],
+        paint: {
+          'line-color': colorWithAlpha(routeColors.flight, 0.28),
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.1, 8, 2.2],
+          'line-opacity': 0.34,
+          'line-blur': 1.8,
+          'line-dasharray': [1.2, 2.8],
+        },
+      },
+      {
+        id: 'journey-flight-glow',
+        type: 'line',
+        source: 'journeys',
+        filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'flight']],
+        paint: {
+          'line-color': routeColors.flight,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 7, 8, 13],
+          'line-opacity': 0.24,
+          'line-blur': 2.8,
+        },
+      },
+      {
         id: 'journey-flight',
         type: 'line',
         source: 'journeys',
@@ -3325,8 +3357,8 @@ function buildMaplibreStyle() {
         paint: {
           'line-color': routeColors.flight,
           'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.8, 8, 5.2],
-          'line-opacity': 0.82,
-          'line-blur': 0.35,
+          'line-opacity': 0.9,
+          'line-blur': 0.18,
         },
       },
       {
@@ -3605,6 +3637,13 @@ function updateJourneyVehicleMarkers() {
     el.style.setProperty('--vehicle-color', color)
     el.style.setProperty('--vehicle-halo', colorWithAlpha(color, 0.28))
     el.style.setProperty('--vehicle-rotate', `${bearing + (type === 'flight' ? -38 : 0)}deg`)
+    if (type === 'flight') {
+      el.style.setProperty('--vehicle-lift', `${-8 - Math.sin(Math.PI * progress) * 22}px`)
+      el.style.setProperty('--vehicle-scale', String(1 + Math.sin(Math.PI * progress) * 0.22))
+    } else {
+      el.style.setProperty('--vehicle-lift', '0px')
+      el.style.setProperty('--vehicle-scale', '1')
+    }
     el.classList.remove('journey-vehicle-flight', 'journey-vehicle-train', 'journey-vehicle-car', 'journey-vehicle-ship')
     el.classList.add(`journey-vehicle-${type}`)
     marker.setLngLat(point)
@@ -3817,6 +3856,7 @@ function updateJourneyAnimationFrame() {
   const routeColors = activeMapSkinConfig.value.routes
   const progress = 0.15 + ((journeyAnimationFrame % 70) / 100)
   const flowLayers = [
+    ['journey-flight-glow', routeColors.flight],
     ['journey-flow-flight', routeColors.flight],
     ['journey-flow-train', routeColors.train],
     ['journey-flow-car', routeColors.car],
@@ -3827,7 +3867,13 @@ function updateJourneyAnimationFrame() {
     if (mapInstance.getLayer(layerId)) {
       mapInstance.setPaintProperty(layerId, 'line-color', colorWithAlpha(color, 0.9))
       mapInstance.setPaintProperty(layerId, 'line-dasharray', buildJourneyFlowGradient(color, progress))
-      mapInstance.setPaintProperty(layerId, 'line-opacity', 0.24 + Math.sin(progress * Math.PI * 2) * 0.08)
+      mapInstance.setPaintProperty(
+        layerId,
+        'line-opacity',
+        layerId === 'journey-flight-glow'
+          ? 0.22 + Math.sin(progress * Math.PI * 2) * 0.08
+          : 0.24 + Math.sin(progress * Math.PI * 2) * 0.08,
+      )
     }
   })
   updateJourneyVehicleMarkers()
@@ -5714,6 +5760,8 @@ watch(
   --vehicle-halo: rgba(74, 144, 217, 0.28);
   --vehicle-glass: rgba(255, 255, 255, 0.84);
   --vehicle-rotate: 0deg;
+  --vehicle-lift: 0px;
+  --vehicle-scale: 1;
   position: relative;
   width: 40px;
   height: 40px;
@@ -5722,7 +5770,8 @@ watch(
   filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.2));
   pointer-events: auto;
   cursor: pointer;
-  transform: translateZ(0);
+  transform: translateY(var(--vehicle-lift)) scale(var(--vehicle-scale)) translateZ(0);
+  transition: transform 0.08s linear;
 }
 
 .journey-vehicle-marker::before {
@@ -5773,7 +5822,6 @@ watch(
   width: 50px;
   height: 50px;
   filter: drop-shadow(0 18px 22px rgba(0, 0, 0, 0.26));
-  animation: flightFloat 2.2s ease-in-out infinite;
 }
 
 .journey-vehicle-flight .journey-vehicle-trail {
