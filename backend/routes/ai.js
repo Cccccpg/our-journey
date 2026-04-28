@@ -1,4 +1,6 @@
 const express = require('express');
+const http = require('http');
+const https = require('https');
 const { authMiddleware } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -20,6 +22,65 @@ function normalizeArkBaseUrl(value) {
 function getChatCompletionsUrl() {
   if (process.env.ARK_CHAT_COMPLETIONS_URL) return process.env.ARK_CHAT_COMPLETIONS_URL;
   return `${normalizeArkBaseUrl(process.env.ARK_BASE_URL || DEFAULT_BASE_URL)}/chat/completions`;
+}
+
+function getApiKey() {
+  return process.env.ARK_API_KEY
+    || process.env.VOLCENGINE_API_KEY
+    || process.env.OPENAI_API_KEY
+    || process.env.API_KEY
+    || '';
+}
+
+function postJson(url, payload, headers, signal) {
+  if (typeof fetch === 'function') {
+    return fetch(url, {
+      method: 'POST',
+      signal,
+      headers,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const client = parsed.protocol === 'https:' ? https : http;
+    const body = JSON.stringify(payload);
+    const req = client.request(
+      {
+        method: 'POST',
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: `${parsed.pathname}${parsed.search}`,
+        headers: {
+          ...headers,
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let text = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { text += chunk; });
+        res.on('end', () => {
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            text: async () => text,
+            json: async () => JSON.parse(text || '{}'),
+          });
+        });
+      },
+    );
+
+    req.on('error', reject);
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        req.destroy(new Error('AI provider request timed out'));
+      });
+    }
+    req.write(body);
+    req.end();
+  });
 }
 
 function getClientIp(req) {
@@ -95,7 +156,7 @@ function extractJson(content) {
 }
 
 async function callModel({ system, user, temperature = 0.72 }) {
-  const apiKey = process.env.ARK_API_KEY;
+  const apiKey = getApiKey();
   if (!apiKey || apiKey === 'replace_with_your_ark_api_key') {
     const error = new Error('ARK_API_KEY is not configured');
     error.status = 503;
@@ -103,25 +164,25 @@ async function callModel({ system, user, temperature = 0.72 }) {
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), 60_000);
 
   try {
-    const response = await fetch(getChatCompletionsUrl(), {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const response = await postJson(
+      getChatCompletionsUrl(),
+      {
         model: process.env.ARK_MODEL || DEFAULT_MODEL,
         temperature,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-      }),
-    });
+      },
+      {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      controller.signal,
+    );
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
@@ -134,7 +195,7 @@ async function callModel({ system, user, temperature = 0.72 }) {
     const data = await response.json();
     return data.choices?.[0]?.message?.content || data.choices?.[0]?.text || data.output_text || data.output?.text || '';
   } catch (error) {
-    if (error.name === 'AbortError') {
+    if (error.name === 'AbortError' || error.message === 'AI provider request timed out') {
       const timeoutError = new Error('AI provider request timed out');
       timeoutError.status = 504;
       timeoutError.providerUrl = getChatCompletionsUrl();

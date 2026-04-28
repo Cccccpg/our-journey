@@ -1878,7 +1878,10 @@ async function runAiMapSummary() {
     if (error.response?.status === 401) {
       handleAiAuthExpired()
     } else {
-      showSystemNotice(error.response?.data?.error || 'AI 服务暂时不可用，已先生成本地视角总结。', 'error')
+      const message = error.response?.status === 502
+        ? 'AI 服务在服务器端调用失败，请检查服务器 ARK_API_KEY / ARK_BASE_URL 配置，已先生成本地视角总结。'
+        : (error.response?.data?.error || 'AI 服务暂时不可用，已先生成本地视角总结。')
+      showSystemNotice(message, 'error')
     }
   } finally {
     aiBusy.value.summary = false
@@ -2226,9 +2229,17 @@ const yearOptions = computed(() => {
 })
 
 const footprintGroups = computed(() => {
+  return groupFootprints(filteredCities.value)
+})
+
+const mapFootprintGroups = computed(() => {
+  return groupFootprints(placesStore.cities)
+})
+
+function groupFootprints(cities) {
   const groups = new Map()
 
-  filteredCities.value.forEach((city) => {
+  cities.forEach((city) => {
     const key = city.district_adcode
       ? `district:${city.district_adcode}`
       : city.city_adcode
@@ -2252,7 +2263,7 @@ const footprintGroups = computed(() => {
     ...group,
     photo_count: group.records.reduce((sum, record) => sum + (record.photo_count || 0), 0),
   }))
-})
+}
 
 const filterOptions = computed(() => {
   const source = scopedCities.value
@@ -2995,6 +3006,29 @@ function getPointOnRoute(coords, progress) {
   return { point: coords[coords.length - 1], bearing: 0 }
 }
 
+function buildRouteBeads(journey, coordinates) {
+  if (journey.transport_type !== 'flight') return []
+  const steps = 9
+  return Array.from({ length: steps }, (_, index) => {
+    const progress = (index + 1) / (steps + 1)
+    const { point } = getPointOnRoute(coordinates, progress)
+    const altitude = Math.sin(Math.PI * progress)
+    return {
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: point,
+      },
+      properties: {
+        type: 'flight-altitude',
+        transport: 'flight',
+        id: journey.id,
+        altitude,
+      },
+    }
+  })
+}
+
 function colorWithAlpha(color, alpha) {
   if (!color) return `rgba(255, 255, 255, ${alpha})`
   if (color.startsWith('rgba')) return color
@@ -3290,8 +3324,33 @@ function buildMaplibreStyle() {
         filter: ['all', ['==', ['get', 'type'], 'route'], ['==', ['get', 'transport'], 'flight']],
         paint: {
           'line-color': routeColors.flight,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.4, 8, 4.6],
-          'line-opacity': 0.72,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 2, 2.8, 8, 5.2],
+          'line-opacity': 0.82,
+          'line-blur': 0.35,
+        },
+      },
+      {
+        id: 'journey-flight-altitude',
+        type: 'circle',
+        source: 'journeys',
+        filter: ['==', ['get', 'type'], 'flight-altitude'],
+        paint: {
+          'circle-radius': [
+            'interpolate',
+            ['linear'],
+            ['get', 'altitude'],
+            0, 2,
+            1, 7,
+          ],
+          'circle-color': routeColors.flight,
+          'circle-opacity': [
+            'interpolate',
+            ['linear'],
+            ['get', 'altitude'],
+            0, 0.18,
+            1, 0.68,
+          ],
+          'circle-blur': 0.45,
         },
       },
       // 旅程路线 - 火车
@@ -3444,7 +3503,7 @@ function buildFootprintGeoJSON() {
   const features = []
 
   // 添加足迹点
-  footprintGroups.value.forEach((group) => {
+  mapFootprintGroups.value.forEach((group) => {
     if (!group.longitude || !group.latitude) return
     features.push({
       type: 'Feature',
@@ -3487,6 +3546,8 @@ function buildJourneyGeoJSON() {
         to_city: journey.to_city_name,
       },
     })
+
+    features.push(...buildRouteBeads(journey, coordinates))
   })
 
   return { type: 'FeatureCollection', features }
@@ -5654,8 +5715,8 @@ watch(
   --vehicle-glass: rgba(255, 255, 255, 0.84);
   --vehicle-rotate: 0deg;
   position: relative;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: 999px;
   color: var(--vehicle-color);
   filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.2));
@@ -5703,23 +5764,33 @@ watch(
 }
 
 .journey-vehicle-glyph svg {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   fill: currentColor;
 }
 
 .journey-vehicle-flight {
-  width: 40px;
-  height: 40px;
+  width: 50px;
+  height: 50px;
   filter: drop-shadow(0 18px 22px rgba(0, 0, 0, 0.26));
   animation: flightFloat 2.2s ease-in-out infinite;
 }
 
 .journey-vehicle-flight .journey-vehicle-trail {
-  left: -26px;
-  width: 38px;
-  height: 4px;
-  opacity: 0.78;
+  left: -42px;
+  width: 58px;
+  height: 5px;
+  opacity: 0.86;
+  box-shadow: 0 0 18px var(--vehicle-halo);
+}
+
+.journey-vehicle-flight .journey-vehicle-glyph {
+  inset: 4px;
+}
+
+.journey-vehicle-flight .journey-vehicle-glyph svg {
+  width: 30px;
+  height: 30px;
 }
 
 .journey-vehicle-train .journey-vehicle-trail {
