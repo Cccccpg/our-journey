@@ -1160,6 +1160,7 @@ const SPACE_VIEW_MAX_ZOOM = 2.6
 let mapInstance = null
 let maplibreGlModule = null
 let provinceLabelMarkers = []
+let journeyVehicleMarkers = new Map()
 let suppressLocationSync = false
 
 const showThemePanel = ref(false)
@@ -1827,6 +1828,13 @@ function ensureAiAccess() {
   return false
 }
 
+function handleAiAuthExpired() {
+  localStorage.removeItem('jwt')
+  editMode.isAuthenticated = false
+  openPasswordModal()
+  showSystemNotice('编辑登录状态已过期，请重新输入密码后再使用 AI。', 'error')
+}
+
 async function runAiFootprintDraft() {
   if (!ensureAiAccess() || aiBusy.value.draft) return
   aiBusy.value.draft = true
@@ -1867,7 +1875,11 @@ async function runAiMapSummary() {
     showToast('AI 已总结当前视角')
   } catch (error) {
     aiMapSummary.value = buildLocalMapSummary()
-    showSystemNotice(error.response?.data?.error || 'AI 服务暂时不可用，已先生成本地视角总结。', 'error')
+    if (error.response?.status === 401) {
+      handleAiAuthExpired()
+    } else {
+      showSystemNotice(error.response?.data?.error || 'AI 服务暂时不可用，已先生成本地视角总结。', 'error')
+    }
   } finally {
     aiBusy.value.summary = false
   }
@@ -1905,6 +1917,9 @@ async function runAiSearch() {
       }
     }
   } catch (error) {
+    if (error.response?.status === 401) {
+      handleAiAuthExpired()
+    }
     const ids = localSemanticSearch(query, scopedCities.value)
     aiMatchedIds.value = ids
     aiSearchReason.value = ids.length
@@ -2876,10 +2891,10 @@ function buildLineData(cities) {
 
 // 旅程路线构建 - 按交通类型分组
 const transportConfig = {
-  flight: { color: '#4A90D9', curveness: 0.5, symbol: 'plane', width: 2 },
-  train: { color: '#4A9B7C', curveness: 0, symbol: 'train', width: 2, type: 'dashed' },
-  car: { color: '#F6AD55', curveness: 0.2, symbol: 'car', width: 2.5 },
-  ship: { color: '#2C5F4D', curveness: 0.35, symbol: 'ship', width: 2 },
+  flight: { color: '#4A90D9', lift: 0.36, wave: 0, speed: 0.008, dash: [1.6, 1.2], height: 1 },
+  train: { color: '#4A9B7C', lift: 0.02, wave: 0, speed: 0.006, dash: [2, 2], height: 0 },
+  car: { color: '#F6AD55', lift: 0.08, wave: 0.12, speed: 0.005, dash: [1, 1.4], height: 0 },
+  ship: { color: '#2C5F4D', lift: 0.1, wave: 0.18, speed: 0.004, dash: [3, 1.2], height: 0 },
 }
 
 function buildJourneyLineData(journeys, transportType) {
@@ -2910,6 +2925,74 @@ function getTransportMapIcon(type) {
     case 'ship': return '⛴'
     default: return '•'
   }
+}
+
+function getTransportIconSvg(type) {
+  const icons = {
+    flight:
+      '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 18.4 29 4.2c.8-.4 1.6.4 1.1 1.2L15.7 30l-3.1-9.7-8.8 2.2L3 18.4Zm10.4-1.5 2 6.2L24 8.5l-12 8.4 1.4.0Z"/></svg>',
+    train:
+      '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 3h14c2.2 0 4 1.8 4 4v13.5c0 2.1-1.7 3.8-3.8 3.8L26 29h-4l-2-3.4h-8L10 29H6l2.8-4.7A3.8 3.8 0 0 1 5 20.5V7c0-2.2 1.8-4 4-4Zm1 5v6h12V8H10Zm1 11.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>',
+    car:
+      '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7.2 12.5 9.4 7c.5-1.2 1.6-2 2.9-2h7.4c1.3 0 2.4.8 2.9 2l2.2 5.5A4.5 4.5 0 0 1 29 17v6h-3v3h-4v-3H10v3H6v-3H3v-6a4.5 4.5 0 0 1 4.2-4.5ZM11 8l-1.6 4h13.2L21 8H11Zm-2 8.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4Zm14 0a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4Z"/></svg>',
+    ship:
+      '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 4h14v8h4l-4.6 10.3c-1.6.6-3 .9-4.4.9-1.7 0-3.2-.5-4.7-1-1.4-.5-2.8-.9-4.3-.9-1.2 0-2.5.3-4 .9L1 12h8V4Zm3 8h8V7h-8v5Zm-5.7 3 2 4.3c1.9-.3 3.8.2 5.7.8 2.2.7 4.3 1.4 7.4.1l2.3-5.2H6.3ZM4 26.5c2.2-1.1 4.1-1.3 6-1 1.5.2 2.8.7 4.2 1.1 2.6.8 5.2 1.4 9.8-.8v2.8c-4.4 1.8-7.3 1.3-10 .5-1.6-.5-3-.9-4.6-1-1.4-.1-3 .2-5.4 1.4v-3Z"/></svg>',
+  }
+  return icons[type] || icons.car
+}
+
+function getJourneyRouteCoordinates(journey) {
+  const from = [Number(journey.from_lon), Number(journey.from_lat)]
+  const to = [Number(journey.to_lon), Number(journey.to_lat)]
+  const type = journey.transport_type || 'car'
+  const config = transportConfig[type] || transportConfig.car
+  const steps = type === 'flight' ? 32 : 22
+  const dx = to[0] - from[0]
+  const dy = to[1] - from[1]
+  const distance = Math.hypot(dx, dy)
+  const normal = distance ? [-dy / distance, dx / distance] : [0, 1]
+  const lift = Math.max(distance * config.lift, type === 'flight' ? 1.2 : 0)
+
+  return Array.from({ length: steps + 1 }, (_, index) => {
+    const t = index / steps
+    const ease = Math.sin(Math.PI * t)
+    const wave = Math.sin(Math.PI * 2 * t) * distance * (config.wave || 0)
+    const arc = lift * ease
+    return [
+      from[0] + dx * t + normal[0] * wave,
+      from[1] + dy * t + normal[1] * wave + arc,
+    ]
+  })
+}
+
+function getPointOnRoute(coords, progress) {
+  if (!coords.length) return { point: [0, 0], bearing: 0 }
+  if (coords.length === 1) return { point: coords[0], bearing: 0 }
+
+  const segments = coords.slice(1).map((point, index) => {
+    const prev = coords[index]
+    return Math.hypot(point[0] - prev[0], point[1] - prev[1])
+  })
+  const total = segments.reduce((sum, value) => sum + value, 0) || 1
+  let target = (((progress % 1) + 1) % 1) * total
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const length = segments[index]
+    if (target <= length || index === segments.length - 1) {
+      const from = coords[index]
+      const to = coords[index + 1]
+      const ratio = length ? target / length : 0
+      const point = [
+        from[0] + (to[0] - from[0]) * ratio,
+        from[1] + (to[1] - from[1]) * ratio,
+      ]
+      const bearing = Math.atan2(to[1] - from[1], to[0] - from[0]) * 180 / Math.PI
+      return { point, bearing }
+    }
+    target -= length
+  }
+
+  return { point: coords[coords.length - 1], bearing: 0 }
 }
 
 function colorWithAlpha(color, alpha) {
@@ -3294,22 +3377,6 @@ function buildMaplibreStyle() {
           'line-opacity': 0.32,
         },
       },
-      {
-        id: 'journey-vehicles',
-        type: 'symbol',
-        source: 'journeys',
-        filter: ['==', ['get', 'type'], 'vehicle'],
-        layout: {
-          'text-field': ['get', 'icon'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 16, 8, 22],
-          'text-allow-overlap': true,
-          'text-ignore-placement': true,
-        },
-        paint: {
-          'text-halo-color': getLabelHaloColor(activeMapSkin.value),
-          'text-halo-width': 2,
-        },
-      },
       // 足迹标记点
       {
         id: 'footprint-halos',
@@ -3404,19 +3471,13 @@ function buildJourneyGeoJSON() {
   ;(placesStore.journeys || []).forEach((journey) => {
     if (!journey.from_lon || !journey.from_lat || !journey.to_lon || !journey.to_lat) return
 
-    // 创建大圆弧线（近似）
-    const from = [journey.from_lon, journey.from_lat]
-    const to = [journey.to_lon, journey.to_lat]
-    const midLon = (from[0] + to[0]) / 2
-    const midLat = (from[1] + to[1]) / 2
-    const distance = Math.hypot(to[0] - from[0], to[1] - from[1])
-    const arcHeight = distance * 0.15
+    const coordinates = getJourneyRouteCoordinates(journey)
 
     features.push({
       type: 'Feature',
       geometry: {
         type: 'LineString',
-        coordinates: [from, [midLon, midLat + arcHeight], to],
+        coordinates,
       },
       properties: {
         type: 'route',
@@ -3426,23 +3487,80 @@ function buildJourneyGeoJSON() {
         to_city: journey.to_city_name,
       },
     })
-
-    features.push({
-      type: 'Feature',
-      geometry: {
-        type: 'Point',
-        coordinates: [midLon, midLat + arcHeight],
-      },
-      properties: {
-        type: 'vehicle',
-        transport: journey.transport_type,
-        icon: getTransportMapIcon(journey.transport_type),
-        id: journey.id,
-      },
-    })
   })
 
   return { type: 'FeatureCollection', features }
+}
+
+function buildJourneyVehicleMarker(journey) {
+  const skin = activeMapSkinConfig.value
+  const type = journey.transport_type || 'car'
+  const color = skin.routes?.[type] || transportConfig[type]?.color || skin.point
+  const el = document.createElement('div')
+  el.className = `journey-vehicle-marker journey-vehicle-${type}`
+  el.style.setProperty('--vehicle-color', color)
+  el.style.setProperty('--vehicle-halo', colorWithAlpha(color, 0.28))
+  el.style.setProperty('--vehicle-glass', activeMapSkin.value === 'night' ? 'rgba(9, 14, 24, 0.78)' : 'rgba(255, 255, 255, 0.84)')
+  el.innerHTML = `
+    <span class="journey-vehicle-trail"></span>
+    <span class="journey-vehicle-glyph">${getTransportIconSvg(type)}</span>
+  `
+  el.addEventListener('click', () => {
+    selectedJourney.value = journey
+    showJourneyDetail.value = true
+  })
+  return el
+}
+
+function updateJourneyVehicleMarkers() {
+  if (!mapInstance || !maplibreGlModule) return
+
+  const activeIds = new Set()
+  const frameBase = journeyAnimationFrame / 120
+  ;(placesStore.journeys || []).forEach((journey, index) => {
+    if (!journey.from_lon || !journey.from_lat || !journey.to_lon || !journey.to_lat) return
+
+    const id = String(journey.id)
+    const type = journey.transport_type || 'car'
+    const config = transportConfig[type] || transportConfig.car
+    const offset = ((Number(journey.id) || index + 1) % 17) / 17
+    const progress = (frameBase * (config.speed * 120) + offset) % 1
+    const route = getJourneyRouteCoordinates(journey)
+    const { point, bearing } = getPointOnRoute(route, progress)
+    const color = activeMapSkinConfig.value.routes?.[type] || config.color
+
+    let marker = journeyVehicleMarkers.get(id)
+    if (!marker) {
+      marker = new maplibreGlModule.Marker({
+        element: buildJourneyVehicleMarker(journey),
+        anchor: 'center',
+      })
+        .setLngLat(point)
+        .addTo(mapInstance)
+      journeyVehicleMarkers.set(id, marker)
+    }
+
+    const el = marker.getElement()
+    el.style.setProperty('--vehicle-color', color)
+    el.style.setProperty('--vehicle-halo', colorWithAlpha(color, 0.28))
+    el.style.setProperty('--vehicle-rotate', `${bearing + (type === 'flight' ? -38 : 0)}deg`)
+    el.classList.remove('journey-vehicle-flight', 'journey-vehicle-train', 'journey-vehicle-car', 'journey-vehicle-ship')
+    el.classList.add(`journey-vehicle-${type}`)
+    marker.setLngLat(point)
+    activeIds.add(id)
+  })
+
+  journeyVehicleMarkers.forEach((marker, id) => {
+    if (!activeIds.has(id)) {
+      marker.remove()
+      journeyVehicleMarkers.delete(id)
+    }
+  })
+}
+
+function clearJourneyVehicleMarkers() {
+  journeyVehicleMarkers.forEach(marker => marker.remove())
+  journeyVehicleMarkers = new Map()
 }
 
 function updateFootprintMarkers() {
@@ -3457,6 +3575,7 @@ function updateFootprintMarkers() {
   if (journeySource) {
     journeySource.setData(buildJourneyGeoJSON())
   }
+  updateJourneyVehicleMarkers()
 }
 
 function updateProvinceBoundaryLayer(geojson) {
@@ -3577,6 +3696,7 @@ function updateMapView() {
 
   // 清除旧的 DOM 标注，省份名称不再使用浮层小卡片显示。
   clearProvinceLabelMarkers()
+  clearJourneyVehicleMarkers()
 
   mapInstance.setStyle(buildMaplibreStyle())
 
@@ -3649,6 +3769,7 @@ function updateJourneyAnimationFrame() {
       mapInstance.setPaintProperty(layerId, 'line-opacity', 0.24 + Math.sin(progress * Math.PI * 2) * 0.08)
     }
   })
+  updateJourneyVehicleMarkers()
   journeyAnimationFrame += 2
 }
 
@@ -3663,6 +3784,7 @@ function stopJourneyAnimation() {
     window.clearInterval(journeyAnimationTimer)
     journeyAnimationTimer = null
   }
+  clearJourneyVehicleMarkers()
 }
 
 async function initMap() {
@@ -5524,6 +5646,114 @@ watch(
   opacity: 0.12;
   filter: blur(2px) saturate(0.78);
   pointer-events: none;
+}
+
+.journey-vehicle-marker {
+  --vehicle-color: #4a90d9;
+  --vehicle-halo: rgba(74, 144, 217, 0.28);
+  --vehicle-glass: rgba(255, 255, 255, 0.84);
+  --vehicle-rotate: 0deg;
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  color: var(--vehicle-color);
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.2));
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translateZ(0);
+}
+
+.journey-vehicle-marker::before {
+  content: '';
+  position: absolute;
+  inset: -9px;
+  border-radius: inherit;
+  background: radial-gradient(circle, var(--vehicle-halo), transparent 68%);
+  animation: journeyVehiclePulse 1.8s ease-in-out infinite;
+}
+
+.journey-vehicle-trail {
+  position: absolute;
+  left: -18px;
+  top: 50%;
+  width: 28px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--vehicle-color));
+  opacity: 0.72;
+  transform: translateY(-50%) rotate(var(--vehicle-rotate));
+  transform-origin: right center;
+}
+
+.journey-vehicle-glyph {
+  position: absolute;
+  inset: 3px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--vehicle-color) 38%, transparent);
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.62), transparent 34%),
+    var(--vehicle-glass);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 10px 24px var(--vehicle-halo);
+  transform: rotate(var(--vehicle-rotate));
+}
+
+.journey-vehicle-glyph svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.journey-vehicle-flight {
+  width: 40px;
+  height: 40px;
+  filter: drop-shadow(0 18px 22px rgba(0, 0, 0, 0.26));
+  animation: flightFloat 2.2s ease-in-out infinite;
+}
+
+.journey-vehicle-flight .journey-vehicle-trail {
+  left: -26px;
+  width: 38px;
+  height: 4px;
+  opacity: 0.78;
+}
+
+.journey-vehicle-train .journey-vehicle-trail {
+  background: repeating-linear-gradient(90deg, var(--vehicle-color) 0 6px, transparent 6px 11px);
+}
+
+.journey-vehicle-ship .journey-vehicle-trail {
+  height: 6px;
+  background:
+    radial-gradient(circle at 20% 50%, var(--vehicle-color) 0 2px, transparent 3px),
+    radial-gradient(circle at 50% 50%, var(--vehicle-color) 0 2px, transparent 3px),
+    radial-gradient(circle at 80% 50%, var(--vehicle-color) 0 2px, transparent 3px);
+}
+
+@keyframes journeyVehiclePulse {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 0.86;
+    transform: scale(1.1);
+  }
+}
+
+@keyframes flightFloat {
+  0%,
+  100% {
+    margin-top: -5px;
+  }
+  50% {
+    margin-top: -12px;
+  }
 }
 
 .map-texture-loader {

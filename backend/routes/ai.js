@@ -40,7 +40,7 @@ function rateLimit(req, res, next) {
   requestBuckets.set(key, bucket);
 
   if (bucket.count > 12) {
-    return res.status(429).json({ error: 'AI 调用过于频繁，请稍后再试' });
+    return res.status(429).json({ error: 'AI requests are too frequent. Please try again later.' });
   }
 
   next();
@@ -155,16 +155,16 @@ function sendAiError(res, error) {
 
   const status = error.status && error.status >= 400 && error.status < 600 ? error.status : 502;
   const messageByStatus = {
-    401: 'AI 鉴权失败，请检查 ARK_API_KEY 是否正确',
-    403: 'AI 无权调用当前模型，请检查模型权限或 ARK_MODEL 配置',
-    404: 'AI 接口地址不存在，请确认 ARK_BASE_URL 使用 https://ark.cn-beijing.volces.com/api/coding/v3',
-    429: 'AI 调用过于频繁，请稍后再试',
-    503: 'AI 服务尚未配置，请先设置 ARK_API_KEY',
-    504: 'AI 响应超时，请稍后再试',
+    401: 'AI authorization failed. Please check ARK_API_KEY.',
+    403: 'The configured AI model is not allowed. Please check ARK_MODEL permissions.',
+    404: 'AI endpoint was not found. Use https://ark.cn-beijing.volces.com/api/coding/v3 as ARK_BASE_URL.',
+    429: 'AI requests are too frequent. Please try again later.',
+    503: 'AI service is not configured. Please set ARK_API_KEY on the server.',
+    504: 'AI request timed out. Please try again later.',
   };
 
   res.status(status).json({
-    error: messageByStatus[status] || 'AI 生成暂时失败，请稍后再试',
+    error: messageByStatus[status] || 'AI generation failed. Please try again later.',
   });
 }
 
@@ -188,8 +188,8 @@ router.post('/footprint-draft', async (req, res) => {
   try {
     const content = await callModel({
       system:
-        '你是一个温柔克制的中文旅行手账编辑。只返回严格 JSON，不要 Markdown。字段：title, description, tags。tags 是 4 到 8 个中文短标签数组。',
-      user: `根据以下旅行足迹信息，生成有画面感但不夸张的标题、描述和标签：\n${JSON.stringify(userPayload, null, 2)}`,
+        'You are a gentle Chinese travel journal editor. Return strict JSON only, no Markdown. Output Chinese text. Fields: title, description, tags. tags must be an array of 4 to 8 short Chinese tags.',
+      user: `Create a vivid but restrained title, description, and tags for this travel footprint:\n${JSON.stringify(userPayload, null, 2)}`,
     });
     const json = extractJson(content);
     res.json({
@@ -204,13 +204,13 @@ router.post('/footprint-draft', async (req, res) => {
 
 router.post('/map-summary', async (req, res) => {
   const records = Array.isArray(req.body?.records) ? req.body.records.slice(0, MAX_RECORDS).map(compactRecord) : [];
-  const scope = safeText(req.body?.scope || '当前地图视角', 80);
+  const scope = safeText(req.body?.scope || 'current map view', 80);
 
   try {
     const content = await callModel({
       system:
-        '你是旅行记忆网站的中文旁白编辑。只返回严格 JSON，不要 Markdown。字段：headline, summary, highlights, next_prompt。highlights 是 3 个短句数组。',
-      user: `请基于当前地图视角生成一张“旅行记忆总结卡”。视角：${scope}\n足迹数据：\n${JSON.stringify(records, null, 2)}`,
+        'You are the Chinese narrator for a travel memory website. Return strict JSON only, no Markdown. Output Chinese text. Fields: headline, summary, highlights, next_prompt. highlights must be an array of 3 short Chinese sentences.',
+      user: `Generate a travel memory summary card for this map view. Scope: ${scope}\nFootprint records:\n${JSON.stringify(records, null, 2)}`,
       temperature: 0.68,
     });
     const json = extractJson(content);
@@ -230,14 +230,14 @@ router.post('/search', async (req, res) => {
   const records = Array.isArray(req.body?.records) ? req.body.records.slice(0, MAX_RECORDS).map(compactRecord) : [];
 
   if (!query) {
-    return res.status(400).json({ error: '请输入要搜索的内容' });
+    return res.status(400).json({ error: 'Search query is required.' });
   }
 
   try {
     const content = await callModel({
       system:
-        '你是旅行足迹的语义搜索助手。只返回严格 JSON，不要 Markdown。字段：matched_ids, reason。matched_ids 是数字 ID 数组，最多 8 个。',
-      user: `用户想找：“${query}”。请从足迹数据中找最相关记录，只返回已有 id：\n${JSON.stringify(records, null, 2)}`,
+        'You are a semantic search assistant for travel footprints. Return strict JSON only, no Markdown. Output Chinese text. Fields: matched_ids, reason. matched_ids must be an array of numeric existing IDs, up to 8.',
+      user: `User wants to find: "${query}". Select the most relevant existing records and return only existing IDs:\n${JSON.stringify(records, null, 2)}`,
       temperature: 0.2,
     });
     const json = extractJson(content);
@@ -258,8 +258,8 @@ router.post('/journey-title', async (req, res) => {
   try {
     const content = await callModel({
       system:
-        '你是中文旅行路线命名助手。只返回严格 JSON，不要 Markdown。字段：title, note, tags。tags 是 3 到 6 个中文短标签数组。',
-      user: `请给这段旅途路线生成一个有记忆点的名称、备注和标签：\n${JSON.stringify(journey, null, 2)}`,
+        'You are a Chinese travel route naming assistant. Return strict JSON only, no Markdown. Output Chinese text. Fields: title, note, tags. tags must be an array of 3 to 6 short Chinese tags.',
+      user: `Create a memorable title, note, and tags for this journey route:\n${JSON.stringify(journey, null, 2)}`,
     });
     const json = extractJson(content);
     res.json({
